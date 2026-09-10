@@ -19,4 +19,8 @@ venv/
 # Jupyter
 .ipynb_checkpoints/
 
+# 工具产生的临时文件（PDF 读取时渲染/提取的产物）
+_extracted.txt
+_page*.png
+
 # 数据/结果文件不忽略 —— PDF 与附件 xlsx 全部纳入版本控制
