@@ -23,4 +23,7 @@ venv/
 _extracted.txt
 _page*.png
 
+# Office 临时锁文件（Excel/Word 打开时自动生成）
+~$*
+
 # 数据/结果文件不忽略 —— PDF 与附件 xlsx 全部纳入版本控制
