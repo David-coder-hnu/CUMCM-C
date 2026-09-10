@@ -1,0 +1,22 @@
+# Claude Code 本地机器相关设置（不入库）
+.claude/settings.local.json
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# MATLAB
+*.asv
+
+# Jupyter
+.ipynb_checkpoints/
+
+# 数据/结果文件不忽略 —— PDF 与附件 xlsx 全部纳入版本控制
