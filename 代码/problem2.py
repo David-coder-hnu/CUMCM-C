@@ -27,13 +27,37 @@
 三、本模型：可交付储能计划
     把 SOC 递推里的 E[c̄] 换成"对覆盖率 γ 的可得充电下确界"：
         c_t^min ≤ ĝ_t + d̂_t + q_{γ,t},   q_{γ,t} = { P_ω,t − L_ω,t } 的 (1−γ) 分位
-    γ = 1 ⟹ 逐情景全部可交付（计划层 = 执行层，无模拟歧义）。
+    γ = 1 ⟹ 逐情景全部可交付。注意"可交付"指的只是【SOC 递推可行】：
+    soc_trace 用全情景最小可得富余保守重放，SOC 下界仍 ≥ SOC_MIN。
+    这**不等于**"计划层 = 执行层" —— d̂ 是 LP 的副产品，执行层 execute_soc_causal
+    按实际缺口重算放电，根本不兑现 d̂。实测 d̂ 里约 14% 的放电量发生在缺口为零时，
+    照 d̂ 执行会白付一趟 η 往返损失（同星期几口径 +883,089 元）。
+    所以"闭式计划费"与"因果执行费"是两个数，必须分别报，不可混用。
+
     目标函数仍是 E[e] 的精确值 —— e 只依赖 (ĝ, d̂)，与 SOC 无关 ——
     所以给定 (ĝ, d̂) 的总费是**闭式**的，不需要任何执行层模拟。
 
     注意 q 必须用【裸】(P−L)，不能写成 max(0, P−L)：后者在缺电时段给出 q=0，
     于是 c^min ≤ ĝ+d 与 e ≥ L−P−ĝ−d 同时成立 —— 同一份 ĝ+d 既顶负载缺口又给电池充电，
     凭空造电（实测全年总费掉到 3,061,112 元，远低于完美预见下界 12,229,461 元）。
+
+三之二、情景集：按「低需求日」分组（本次更新）
+    旧口径用"同星期几的历史日"(K=4, 回看 4 周)。本版改为**同组**：先按日均净负荷
+    把七天分成【低需求日】与【其余】两组，再取回看 14 天内与当日同组的历史日。
+    分组规则只喂**暖机期**（前 31 天，报告窗口之前）⟹ 推导无前视。
+    实测 {周五,周六} 为低需求日，且该结论对窗口不敏感：暖机期 31 天 / 1-6 月 /
+    全年三个窗口都给出同一答案。低需求日日均净负荷约为其余五天的 1/2 ~ 1/3。
+
+    收益（统一 execute_soc_causal 因果执行，334 个报告日，逐日配对）：
+        同星期几 K=4（旧）  15,134,192 元
+        同组 {周五,周六}     14,341,723 元    Δ = -792,470（-5.24%）
+        95% 移动块自助(14 天) 置信区间 [-4,395, -903]，单侧 p < 0.001
+    归因：缩短窗口本身（同星期几 K=2）不显著（-92,652，CI 含 0，p=0.37）；
+    分组本身的净贡献 -699,818，但只在边缘显著（CI 勉强含 0，单侧 p≈0.03），
+    且收益集中在 6 月上旬与 12 月上旬两簇（前 15 个省钱日占 12 天）。
+    样本外复核：只用 1-6 月推出的分组仍是 {周五,周六}，在 7-12 月窗口独立省 445,290 元。
+    ⟹ 论文中可以主张"低需求日分组 + 缩短窗口"这个**配方**优于旧口径；
+    **不要**单独主张"分组"这一个动作为显著。详见 文档/问题2_求解归档.md §7。
 
 四、实际执行层（写 result2.xlsx）
     规划层给出最终计划购电量 g。执行层采用 execute_soc_causal：
@@ -43,7 +67,7 @@
     问题 2 没有终端 SOC 约束，因此实际年末 SOC 不强制回到 6000。
 
 五、保留（必须写进论文）
-    γ=1 的"可交付"是**对建模情景集**（同星期几的历史日）而言，不是分布无关的鲁棒保证。
+    γ=1 的"可交付"是**对建模情景集**（同组历史日，见三之二）而言，不是分布无关的鲁棒保证。
     自检口径见 soc_trace：充电按【全情景中最小的可得富余】保守重放，得到真实 SOC 的下界。
     交付结果采用 execute_soc_causal 在 2025 实际轨迹上重算，SOC 上下限逐槽自检。
 
@@ -55,7 +79,7 @@
 六、未竟事项（如实记录，勿在论文中夸大）
     "把一阶段决策放进仿真回路标定"（ĝ 对着可执行的滚动 MPC 标定）**已尝试且失败**：
     在同一个诚实账本下，可执行的因果 MPC 全年最好只有 19,958,082 元，
-    比本模型最终实际执行成本 15,134,192 元**贵 31.9%**。瓶颈不在 ĝ 规则，
+    比本模型最终实际执行成本 14,341,723 元**贵 39.2%**。瓶颈不在 ĝ 规则，
     在执行器的跨时段 SOC 管理
     （标量末端影子价格 λ 无法同时表达"留住电量"与"用掉电量"）。
     所以本文件交付的是"γ=1 计划购电 + 严格 SOC 因果执行轨迹"，不是"在线最优策略"。
@@ -87,7 +111,9 @@ DT, ETA, P_MAX = 1.0 / 6.0, 0.9, 5000.0
 SOC_MIN, SOC_MAX, SOC0 = 1200.0, 10800.0, 6000.0
 N, NDAYS, REPORT = 144, 365, 31
 T = N * NDAYS
-K_PEERS = 4                     # 情景集：同星期几的历史日
+K_PEERS = 4                     # 同星期几情景数（仅作对照与点预测参照）
+GROUP_SPAN = 14                 # 分组情景集的回看窗口（天）
+GROUP_TRAIN = REPORT            # 分组规则只喂暖机期（前 31 天）⟹ 推导无前视
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 price_day = pd.read_excel(os.path.join(BASE, "附件", "附件1.xlsx")).iloc[:, 1].to_numpy(float)
@@ -99,17 +125,54 @@ price = np.tile(price_day, NDAYS)
 win = np.zeros(T, bool); win[REPORT * N:] = True
 L = load.ravel(); P = pv.ravel()
 
-peers = [[d - 7 * k for k in range(1, K_PEERS + 1) if d - 7 * k >= 0] for d in range(NDAYS)]
-base_e = np.zeros(NDAYS, dtype=np.int64)
-_c = 0
-for d in range(NDAYS):
-    base_e[d] = _c
-    _c += max(1, len(peers[d])) * N          # 场景数下限取 1（前 4 周退化为当日点预报）
-E_total = _c
+net_load = (load - pv).sum(axis=1)          # 各日净负荷，用于推断低需求日
 
-def sc_idx(d):
-    """day d 的情景天列表；前 4 周无同星期几历史时退化为 [d] 本身（单情景）。"""
-    return peers[d] if peers[d] else [d]
+
+def low_demand_dows(train_days):
+    """从 train_days 推断「低需求日」：日均净负荷最低的两个星期几。
+
+    只喂报告窗口之前的数据，所以推导过程不含前视。该规则对窗口不敏感 ——
+    暖机期(31 天) / 1-6 月 / 全年 三个窗口都给出同一答案 {周五,周六}。
+    低需求日的日均净负荷只有其余五天的 ~1/2（暖机期）到 ~1/3（全年）。
+    """
+    dow = np.array([d % 7 for d in range(NDAYS)])
+    means = [net_load[train_days][dow[train_days] == k].mean() for k in range(7)]
+    order = np.argsort(means)
+    return (int(order[0]), int(order[1])), means
+
+
+def build_peers_group(dows, span=GROUP_SPAN):
+    """同组情景集：回看 span 天内、与当日同组的历史日。"""
+    m = np.array([(d % 7) in dows for d in range(NDAYS)])
+    return [[t for t in range(max(0, d - span), d) if m[t] == m[d]] for d in range(NDAYS)]
+
+
+def build_peers_weekday(k=K_PEERS):
+    """同星期几情景集（旧口径，保留作对照与点预测参照）。"""
+    return [[d - 7 * j for j in range(1, k + 1) if d - 7 * j >= 0] for d in range(NDAYS)]
+
+
+def prep_peers(pp):
+    """把情景天列表编成 LP 的列偏移，返回 (base_e, E_total)。
+
+    场景数下限取 1：第 d 天没有同组历史时退化为 [d] 本身（单情景，等价点预报）。
+    """
+    base_e = np.zeros(NDAYS, dtype=np.int64)
+    c = 0
+    for d in range(NDAYS):
+        base_e[d] = c
+        c += max(1, len(pp[d])) * N
+    return base_e, c
+
+
+def sc_of(pp, d):
+    """第 d 天实际使用的场景天列表。"""
+    return pp[d] if pp[d] else [d]
+
+
+GROUP_DOWS, DOW_MEANS = low_demand_dows(np.arange(0, GROUP_TRAIN))
+peers_wd = build_peers_weekday(K_PEERS)     # 旧口径：对照 + 点预测参照
+peers = build_peers_group(GROUP_DOWS)       # 交付所用情景集
 
 
 def honor_cost(g, d):
@@ -120,12 +183,13 @@ def honor_cost(g, d):
     return planned + emerg, planned, emerg, (e * DT)[win].sum()
 
 
-def soc_trace(g, d, cm):
+def soc_trace(g, d, cm, pp=None):
     """真实 SOC 轨迹：充电按【全部情景里最小的可得富余】保守重放，得真实 SOC 的下界。
     计划可交付 ⟺ 该下界 ≥ SOC_MIN。"""
+    pp = peers if pp is None else pp
     surp_min = np.empty(T)
     for dd in range(NDAYS):
-        p = sc_idx(dd)
+        p = sc_of(pp, dd)
         surp_min[dd * N:(dd + 1) * N] = (pv[p] - load[p]).min(axis=0)
     c_real = np.minimum(cm, np.maximum(0.0, g + d + surp_min))
     return SOC0 + np.concatenate([[0.0],
@@ -163,13 +227,16 @@ def execute_soc_causal(g):
     return c, d, e, soc
 
 
-def solve_deliver(gamma):
-    """γ 覆盖率下的可交付计划 LP。gamma=1 → q = min_ω(P_ω − L_ω)（全情景可交付）。"""
+def solve_deliver(gamma, pp=None):
+    """γ 覆盖率下的可交付计划 LP。gamma=1 → q = min_ω(P_ω − L_ω)（全情景可交付）。
+    pp=None 用交付情景集；传 peers_wd 即复现旧口径作对照。"""
+    pp = peers if pp is None else pp
+    base_e, E_total = prep_peers(pp)
     G0, D0, S0_, CM0, E0 = 0, T, 2 * T, 3 * T + 1, 4 * T + 1
     n_vars = E0 + E_total
     q = np.empty(T)
     for dd in range(NDAYS):
-        p = sc_idx(dd)
+        p = sc_of(pp, dd)
         vals = pv[p] - load[p]                      # 必须用裸 (P−L)，见模块 docstring 三
         q[dd * N:(dd + 1) * N] = np.quantile(vals, 1.0 - gamma, axis=0) \
             if len(p) > 1 else vals[0]
@@ -177,7 +244,7 @@ def solve_deliver(gamma):
     c_obj = np.zeros(n_vars)
     c_obj[G0:G0 + T] = price
     for dd in range(NDAYS):
-        p = sc_idx(dd); Kd = len(p)
+        p = sc_of(pp, dd); Kd = len(p)
         for w in range(Kd):
             sl = slice(base_e[dd] + w * N, base_e[dd] + (w + 1) * N)
             c_obj[E0 + sl.start:E0 + sl.stop] = 5.0 * price_day / Kd
@@ -198,7 +265,7 @@ def solve_deliver(gamma):
     ud += [np.ones(T), -np.ones(T), -np.ones(T)]
     ub.append(q)
     for dd in range(NDAYS):
-        for w, pd_ in enumerate(sc_idx(dd)):
+        for w, pd_ in enumerate(sc_of(pp, dd)):
             r = base_e[dd] + w * N
             rr = n1 + np.arange(r, r + N)
             tt = dd * N + np.arange(N)
@@ -247,16 +314,28 @@ print("=" * 100)
 print("问题 2：可交付储能计划（deliverable schedule）")
 print("=" * 100)
 
+DOW_NAME = ["Wed", "Thu", "Fri", "Sat", "Sun", "Mon", "Tue"]   # 2025-01-01 = 周三
+print(f"情景集：按日均净负荷把七天分成【低需求日】与【其余】两组")
+print(f"  分组规则只用暖机期（前 {GROUP_TRAIN} 天，在报告窗口之前）推导 ⟹ 无前视")
+print("  各星期几日均净负荷(kWh/日)：" + "  ".join(
+    f"{DOW_NAME[k]}={DOW_MEANS[k]:,.0f}" for k in range(7)))
+_lo = np.mean([DOW_MEANS[k] for k in GROUP_DOWS])
+_hi = np.mean([DOW_MEANS[k] for k in range(7) if k not in GROUP_DOWS])
+print(f"  ⟹ 低需求日 = {{{', '.join(DOW_NAME[k] for k in GROUP_DOWS)}}}"
+      f"，其余五天为对照组；低需求日/其余 = {_lo / _hi:.2f} 倍")
+print(f"  情景集 = 回看 {GROUP_SPAN} 天内与当日同组的历史日")
+
 # ---- 哨兵：完美预见下界（任何低于它的结果都是 bug）----
+print("-" * 100)
 g_pf, c_pf, d_pf = solve_full_year(L - P)
 sent = honor_cost(g_pf, d_pf)
 print(f"{'完美预见下界(哨兵)':<24}{sent[1]:>14,.0f}{sent[2]:>14,.0f}"
       f"{sent[3]:>16,.0f}{sent[0]:>16,.0f}")
 
-# ---- 参照：点预测（负荷同星期几 + 光伏近 7 天）----
+# ---- 参照：点预测（负荷同星期几均值 + 光伏近 7 天均值，沿用旧口径以便历史对照）----
 L_hat = np.empty_like(load)
 for d in range(NDAYS):
-    idx = peers[d]
+    idx = peers_wd[d]
     L_hat[d] = load[idx].mean(axis=0) if idx else load.mean(axis=0)
 P_hat = np.empty_like(pv)
 for d in range(NDAYS):
@@ -269,7 +348,6 @@ pt = honor_cost(g_pt, d_pt_exec)
 print("-" * 100)
 print(f"{'γ 可交付覆盖率':<24}{'计划费(元)':>14}{'紧急费(元)':>14}{'紧急kWh':>16}{'总费(元)':>16}")
 print("-" * 100)
-best = None
 for gamma in [float(x) for x in os.environ.get("GAMMAS", "0,0.25,0.5,0.75,1.0").split(",")]:
     g, d, cm, soc, el = solve_deliver(gamma)
     r = honor_cost(g, d)
@@ -278,17 +356,13 @@ for gamma in [float(x) for x in os.environ.get("GAMMAS", "0,0.25,0.5,0.75,1.0").
         smin = soc_trace(g, d, cm).min()
         print(f"{'  └ 真实SOC下界':<24}{smin:>14,.1f} kWh   "
               f"（≥ {SOC_MIN:.0f} 才说明计划可交付）")
-    if best is None or r[0] < best[0]:
-        best = (r[0], gamma, g, d, cm, soc)
 
 print("-" * 100)
 print(f"  点预测计划（同执行层）   {pt[1]:>14,.0f}{pt[2]:>14,.0f}{pt[3]:>16,.0f}{pt[0]:>16,.0f}")
 print(f"{'  └ 实际SOC范围':<24}[{soc_pt_exec.min():,.1f}, {soc_pt_exec.max():,.1f}] kWh")
 print(f"  哨兵：完美预见下界 {sent[0]:,.0f} 元 —— 任何低于它的结果都是 bug")
-# 自检：任何配置低于哨兵都说明模型被放松了（本项目已因此踩坑三次）
-_r = honor_cost(best[2], best[3])[0]
-assert _r >= sent[0] - 1e-6, \
-    f"总费 {_r:,.0f} 低于完美预见下界 {sent[0]:,.0f} —— 模型被放松了，检查 bounds/约束"
+print(f"  ⚠ γ 表中低于哨兵的行（当前 γ<1 各档）是【不可交付计划】的闭式假价，")
+print(f"    它假设 d̂ 全部兑现，本就允许低于下界 —— 不可引用，也不要拿它触发哨兵断言。")
 
 # ---- 交付：γ=1（唯一可引用的一档）----
 g1, d1, cm1, soc1 = solve_deliver(1.0)[:4]
@@ -298,6 +372,14 @@ assert np.allclose(e_exec, np.maximum(0.0, L - g1 - P - d_exec), atol=1e-8)
 assert c_exec.min() >= -1e-9 and c_exec.max() <= P_MAX + 1e-6
 assert d_exec.min() >= -1e-9 and d_exec.max() <= P_MAX + 1e-6
 assert soc_exec.min() >= SOC_MIN - 1e-6 and soc_exec.max() <= SOC_MAX + 1e-6
+
+# 哨兵自检：只查【交付口径】—— γ=1 的闭式计划费与因果执行总费，二者都是可交付的量。
+# 不能拿 min over γ 去比：γ<1 的计划不可交付，其闭式价假设 d̂ 全部兑现，
+# 本就允许低于下界（本项目旧版把这个错误掩盖了，见 docstring 与归档 §4.1）。
+_r1_plan = honor_cost(g1, d1)[0]
+for _lbl, _v in (("γ=1 闭式计划费", _r1_plan), ("γ=1 因果执行总费", r1[0])):
+    assert _v >= sent[0] - 1e-6, \
+        f"{_lbl} {_v:,.0f} 低于完美预见下界 {sent[0]:,.0f} —— 模型被放松了，检查 bounds/约束"
 print()
 print("=" * 100)
 print(f"规划层 γ=1：计划购电 {r1[1]:,.0f} 元")
@@ -308,6 +390,39 @@ print(f"  哨兵下界 {sent[0]:,.0f} 元 ｜ 高出 {(r1[0] / sent[0] - 1) * 10
 print(f"  点预测   {pt[0]:,.0f} 元 ｜ γ=1 比它 {'省' if r1[0] < pt[0] else '贵'} "
       f"{abs(pt[0] - r1[0]):,.0f} 元")
 print("=" * 100)
+
+# ---- 情景集对照：同星期几(旧口径) vs 同组(交付)，都在 γ=1 + 同一因果执行器下 ----
+def _exec_total(g):
+    """因果执行后的总费（计划费 + 紧急费），与交付口径完全一致。
+
+    honor_cost(g, d) 的第二个参数是【放电量】，紧急量由它反算
+    e = max(0, L−P−g−d)；不要误传 execute_soc_causal 返回的紧急量。
+    """
+    return honor_cost(g, execute_soc_causal(g)[1])
+
+
+g_wd, d_wd, cm_wd = solve_deliver(1.0, peers_wd)[:3]
+r_wd = _exec_total(g_wd)
+smin_wd = soc_trace(g_wd, d_wd, cm_wd, peers_wd).min()
+r_gp = _exec_total(g1)
+smin_gp = soc_trace(g1, d1, cm1).min()
+
+print()
+print("情景集对照（γ=1 规划 + execute_soc_causal，统计窗口 334 天）")
+print("-" * 100)
+print(f"{'情景集':<32}{'闭式计划费(元)':>16}{'因果执行总费(元)':>18}{'紧急kWh':>12}"
+      f"{'SOC下界':>12}")
+print("-" * 100)
+_rows = [(f"同星期几 K={K_PEERS}（旧口径）", r_wd, smin_wd),
+         (f"同组 {{{','.join(DOW_NAME[k] for k in GROUP_DOWS)}}}（本次交付）", r_gp, smin_gp)]
+for tag, r, sm in _rows:
+    print(f"{tag:<32}{r[1]:>16,.0f}{r[0]:>18,.0f}{r[3]:>12,.0f}{sm:>12,.1f}")
+print("-" * 100)
+print(f"  改用同组情景集：{r_gp[0] - r_wd[0]:+,.0f} 元 "
+      f"({(r_gp[0] - r_wd[0]) / r_wd[0] * 100:+.2f}%)")
+print(f"  可交付性：两种情景集的 SOC 下界都 ≥ {SOC_MIN:.0f} kWh ⟹ 均为可行计划")
+print("  归因提示：该差额含「缩短窗口」与「分组」两个效应，单看这一行不能把功劳记给分组；")
+print("            逐日配对检验与归因分解见 文档/问题2_求解归档.md §7。")
 
 # ---- 写 结果/result2.xlsx（沿用 附件5 模板）----
 g_day = (g1 * DT).reshape(NDAYS, N)
