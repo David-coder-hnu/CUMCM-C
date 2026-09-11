@@ -84,6 +84,16 @@ d = x[D0:D0 + T]           # 计划放电功率 kW
 soc = x[S_idx:S_idx + T + 1]   # 储电量 kWh
 s = x[S0:S0 + T]               # 弃光功率 kW
 
+# ---------------- 全局最优性证书（强对偶：原目标 = 对偶目标，间隙≈0） ----------------
+# 线性规划是凸规划，任意 KKT 点即全局最优；HiGHS 同时给出对偶乘子，可用对偶间隙自证。
+_bnd = np.array([(lo if lo is not None else 0.0, hi if hi is not None else np.inf)
+                 for lo, hi in bounds])
+_lb, _ub = _bnd[:, 0], _bnd[:, 1]
+_dual = (float(np.dot(b_eq, res.eqlin.marginals))
+         + float(np.dot(_lb, res.lower.marginals))
+         + float(np.dot(_ub[np.isfinite(_ub)], res.upper.marginals[np.isfinite(_ub)])))
+_duality_gap = res.fun - _dual          # 原目标 − 对偶目标，应 ≈ 0
+
 # ---------------- 紧急购电（实际 vs 计划） ----------------
 e = np.maximum(0.0, load.ravel() + c - g - pv.ravel() - d)     # 紧急购电功率 kW
 
@@ -107,6 +117,7 @@ print("=" * 64)
 print("问题 2 求解结果自检（统计窗口 2/1–12/31）")
 print("=" * 64)
 print(f"LP 状态              : {res.message}")
+print(f"强对偶间隙(原-对偶)   : {_duality_gap:.3e} (应≈0，证明全局最优)")
 print(f"计划阶段功率平衡残差  : {bal:.2e} kW (应≈0)")
 print(f"SOC 范围             : [{soc.min():.4f}, {soc.max():.4f}] kWh (应∈[1200,10800])")
 print(f"SOC_0 / SOC_T        : {soc[0]:.4f} / {soc[-1]:.4f} kWh (应=6000)")
