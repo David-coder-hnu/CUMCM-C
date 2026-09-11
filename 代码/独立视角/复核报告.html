@@ -1,0 +1,591 @@
+<title>问题2 可交付性复核</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --ground:#f1f5f4; --surface:#ffffff; --surface-2:#e7eeec; --surface-3:#dde7e4;
+    --ink:#0f1e1c; --ink-2:#3a4d4a; --muted:#6b7e7a;
+    --line:#d0dcda; --line-strong:#adc0bc;
+    --accent:#0d6e62; --accent-soft:#d6ebe7;
+    --brass:#8f6413; --brass-soft:#f1e5cb;
+    --bad:#a4231a; --bad-soft:#f7dedb;
+    --good:#17672f; --good-soft:#daeddf;
+    --sans:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;
+    --disp:'Archivo','IBM Plex Sans','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;
+    --mono:'IBM Plex Mono',ui-monospace,SFMono-Regular,Consolas,'Microsoft YaHei',monospace;
+    --shadow:0 1px 2px rgba(15,30,28,.05),0 10px 28px -18px rgba(15,30,28,.45);
+    --r:10px;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0b1312; --surface:#121e1c; --surface-2:#182726; --surface-3:#1f3130;
+      --ink:#e3edeb; --ink-2:#b6c9c5; --muted:#8a9f9b;
+      --line:#233330; --line-strong:#374b48;
+      --accent:#5ac9b8; --accent-soft:#10322d;
+      --brass:#dcac55; --brass-soft:#2c2517;
+      --bad:#f08b80; --bad-soft:#391c19;
+      --good:#6ec98d; --good-soft:#15301e;
+      --shadow:0 1px 2px rgba(0,0,0,.45),0 10px 28px -18px rgba(0,0,0,.9);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0b1312; --surface:#121e1c; --surface-2:#182726; --surface-3:#1f3130;
+    --ink:#e3edeb; --ink-2:#b6c9c5; --muted:#8a9f9b;
+    --line:#233330; --line-strong:#374b48;
+    --accent:#5ac9b8; --accent-soft:#10322d;
+    --brass:#dcac55; --brass-soft:#2c2517;
+    --bad:#f08b80; --bad-soft:#391c19;
+    --good:#6ec98d; --good-soft:#15301e;
+    --shadow:0 1px 2px rgba(0,0,0,.45),0 10px 28px -18px rgba(0,0,0,.9);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.72;
+    padding-inline:20px; padding-block:0;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1000px;margin-inline:auto;padding-block:44px 96px;display:flex;flex-direction:column;gap:44px}
+
+  .eyebrow{
+    font-family:var(--mono); font-size:.72rem; font-weight:500;
+    letter-spacing:.13em; text-transform:uppercase; color:var(--accent);
+    margin:0 0 14px;
+  }
+  h1{
+    font-family:var(--disp); font-weight:700; letter-spacing:-.022em;
+    font-size:clamp(1.85rem,4.4vw,2.7rem); line-height:1.12;
+    margin:0 0 16px; text-wrap:balance;
+  }
+  .lede{margin:0;max-width:62ch;font-size:1.06rem;color:var(--ink-2)}
+  .meta{
+    display:flex;flex-wrap:wrap;gap:8px 22px;margin-top:22px;
+    font-family:var(--mono);font-size:.76rem;color:var(--muted);letter-spacing:.03em;
+  }
+  .meta b{color:var(--ink-2);font-weight:500}
+
+  h2{
+    font-family:var(--disp); font-weight:600; font-size:1.24rem; letter-spacing:-.012em;
+    margin:0 0 16px; display:flex; gap:12px; align-items:baseline; text-wrap:balance;
+  }
+  h2 .n{
+    font-family:var(--mono); font-size:.78rem; font-weight:600; color:var(--accent);
+    border:1px solid var(--line-strong); border-radius:5px; padding:2px 7px;
+    flex:none; line-height:1.35;
+  }
+  h3{font-family:var(--disp);font-weight:600;font-size:1rem;margin:26px 0 10px;letter-spacing:-.008em}
+  p{margin:0 0 14px;max-width:70ch}
+  section{display:flex;flex-direction:column}
+  a{color:var(--accent);text-decoration-thickness:1px;text-underline-offset:2px}
+  a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+  strong{font-weight:600}
+  code{
+    font-family:var(--mono); font-size:.87em; background:var(--surface-2);
+    padding:.12em .4em; border-radius:4px; border:1px solid var(--line);
+  }
+
+  .verdict{
+    background:var(--bad-soft); border:1px solid var(--bad);
+    border-left-width:4px; border-radius:var(--r);
+    padding:22px 24px; display:flex; flex-direction:column; gap:12px;
+  }
+  .verdict .tag{
+    font-family:var(--mono); font-size:.7rem; font-weight:600; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--bad);
+  }
+  .verdict .ineq{
+    font-family:var(--mono); font-size:clamp(1.05rem,2.9vw,1.6rem); font-weight:600;
+    color:var(--bad); display:flex; flex-wrap:wrap; gap:.5em; align-items:baseline;
+    line-height:1.5;
+  }
+  .verdict .ineq em{font-style:normal;font-size:.62em;font-weight:500;color:var(--ink-2)}
+  .verdict p{margin:0;max-width:66ch;color:var(--ink-2);font-size:.94rem}
+
+  .findings{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden}
+  .findings li{background:var(--surface);padding:16px 20px;display:flex;gap:16px;align-items:flex-start}
+  .findings .num{font-family:var(--mono);font-size:.8rem;font-weight:600;color:var(--accent);flex:none;padding-top:2px;min-width:1.4em}
+  .findings .txt{font-size:.95rem;color:var(--ink-2)}
+  .findings .txt b{color:var(--ink);font-weight:600}
+
+  .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);box-shadow:var(--shadow)}
+  table{border-collapse:collapse;width:100%;min-width:560px;font-size:.88rem}
+  caption{
+    caption-side:top;text-align:left;padding:14px 18px 12px;
+    font-family:var(--mono);font-size:.74rem;letter-spacing:.06em;color:var(--muted);
+    border-bottom:1px solid var(--line);
+  }
+  th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+  thead th{
+    font-family:var(--mono);font-size:.7rem;font-weight:600;letter-spacing:.07em;
+    text-transform:uppercase;color:var(--muted);background:var(--surface-2);white-space:nowrap;
+  }
+  tbody tr:last-child td{border-bottom:none}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+  .rowbad{background:var(--bad-soft)}
+  .rowbad td:first-child{box-shadow:inset 3px 0 0 var(--bad)}
+  .rowgood td:first-child{box-shadow:inset 3px 0 0 var(--good)}
+
+  .pill{
+    display:inline-block;font-family:var(--mono);font-size:.72rem;font-weight:600;
+    padding:2px 8px;border-radius:20px;white-space:nowrap;
+  }
+  .pill.bad{background:var(--bad-soft);color:var(--bad);border:1px solid var(--bad)}
+  .pill.good{background:var(--good-soft);color:var(--good);border:1px solid var(--good)}
+  .pill.neutral{background:var(--surface-2);color:var(--muted);border:1px solid var(--line-strong)}
+
+  figure{margin:0;display:flex;flex-direction:column;gap:10px}
+  .chart{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--surface);box-shadow:var(--shadow)}
+  .chart svg{display:block;min-width:760px;width:100%;height:auto}
+  figcaption{font-size:.83rem;color:var(--muted);max-width:74ch}
+
+  pre{
+    margin:0;background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:var(--r);padding:16px 18px;overflow-x:auto;
+    font-family:var(--mono);font-size:.8rem;line-height:1.7;color:var(--ink-2);
+  }
+  pre b{color:var(--ink);font-weight:600}
+  pre .cm{color:var(--muted)}
+
+  .note{
+    border:1px solid var(--line);border-left:3px solid var(--brass);
+    background:var(--brass-soft);border-radius:var(--r);padding:16px 20px;
+    font-size:.92rem;color:var(--ink-2);
+  }
+  .note b{color:var(--ink)}
+  .note p:last-child{margin-bottom:0}
+
+  .cols{display:grid;gap:20px;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr))}
+  .stat{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+    padding:16px 18px;display:flex;flex-direction:column;gap:6px;
+  }
+  .stat .k{font-family:var(--mono);font-size:.7rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+  .stat .v{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:1.42rem;font-weight:600;letter-spacing:-.02em}
+  .stat .s{font-size:.82rem;color:var(--muted);line-height:1.5}
+  .stat.bad .v{color:var(--bad)} .stat.good .v{color:var(--good)} .stat.acc .v{color:var(--accent)}
+
+  ol.steps{margin:0;padding-left:1.3em;display:flex;flex-direction:column;gap:9px;max-width:72ch;font-size:.94rem;color:var(--ink-2)}
+  ol.steps li::marker{font-family:var(--mono);color:var(--accent);font-weight:600}
+  ul.plain{margin:0;padding-left:1.15em;display:flex;flex-direction:column;gap:8px;max-width:72ch;font-size:.94rem;color:var(--ink-2)}
+  hr{border:none;border-top:1px solid var(--line);margin:0}
+  .foot{font-size:.82rem;color:var(--muted);max-width:78ch}
+  .foot p{max-width:none}
+  @media (max-width:520px){
+    .verdict{padding:18px}
+    .findings li{padding:14px 16px;gap:12px}
+  }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">CUMCM 2026 · C 题 · 问题 2 · 独立复核</p>
+    <h1>现交付购电计划的储能放电量在物理上不存在</h1>
+    <p class="lede">
+      从题面与附件原始数据独立重算：<code>结果/result2.xlsx</code> 报出的 13,832,465 元
+      低于它自己那份购电计划所对应的物理下界 15,347,211 元。这不是精度问题 ——
+      任何执行策略，包括拥有日内完美预见的策略，都做不到。根因是计划层与执行层用了两套储能物理。
+    </p>
+    <div class="meta">
+      <span><b>统计窗口</b> 2/1–12/31 · 334 天</span>
+      <span><b>储能</b> η=0.9 · P<sub>max</sub>=5000 kW · SOC 1200–10800</span>
+      <span><b>复算代码</b> 代码/独立视角/</span>
+    </div>
+  </header>
+
+  <div class="verdict">
+    <span class="tag">判定 · 不可能</span>
+    <div class="ineq">
+      <span>13,832,465</span> <span>&lt;</span> <span>15,347,211</span>
+      <em>计划报出值 &nbsp;&lt;&nbsp; 同 ĝ 下界</em>
+    </div>
+    <p>
+      (C) 是在<strong>固定同一份日前购电量 ĝ</strong> 后，让储能做全年完美预见 LP 得到的费用。
+      由于购电费 <span style="font-family:var(--mono)">Σ p·ĝ·Δt</span> 完全相同，而紧急购电逐槽满足
+      <span style="font-family:var(--mono)">e ≥ L−P−ĝ−d</span>，所以 (C) 是任何策略都达不到的下界。
+      该计划的诚实执行成本是 <strong>18,779,159 元</strong>，其中 <strong>914,735 kWh 放电量被 SOC 下限卡掉</strong>。
+    </p>
+  </div>
+
+  <section>
+    <h2><span class="n">§0</span>结论速览</h2>
+    <ul class="findings">
+      <li><span class="num">1</span><span class="txt">
+        <b>现交付计划在算术上不可能实现。</b>报 13,832,465 元，其同 ĝ 物理下界是 15,347,211 元，低出 1,514,746 元。
+      </span></li>
+      <li><span class="num">2</span><span class="txt">
+        <b>其诚实执行成本为 18,779,159 元</b>，比自报高 35.7%，且高于点预测方案的诚实执行成本 17,062,165 元。
+        因此"随机规划相对点预测节省 8.36%"不成立。
+      </span></li>
+      <li><span class="num">3</span><span class="txt">
+        <b>把储能层拉平后，SP 的日前购电量 ĝ 反而被点预测方案占优</b>：同 ĝ 完美预见下
+        15,347,211 元 vs 14,668,624 元，差 678,587 元。SP 的"省钱"全部来自那份放不出来的 d̂。
+      </span></li>
+      <li><span class="num">4</span><span class="txt">
+        <b>根因：</b>SOC 递推用情景平均充电 <span style="font-family:var(--mono)">E[c̄]</span>，
+        而 d̂ 是一阶段承诺量。实际充电在缺电情景被削到 0，实际 SOC 恒低于计划 SOC。
+      </span></li>
+      <li><span class="num">5</span><span class="txt">
+        <b>替代算法：</b>日前只承诺 ĝ，储能与紧急购电降为二阶段追索，槽级能量平衡作唯一耦合约束。
+        可立即采用的安全版本（γ=1 可交付计划）年内可保证 15,187,755 元，对全年实测约 15.39–16.02 M 元。
+      </span></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="n">§1</span>口径先对齐</h2>
+    <p>
+      所有比较都在同一口径下进行，避免"改口径改出结论"。数据自洽性已独立核对：
+      附件 1 的电价 = 附件 4 全年均价（最大偏差 5.15e-5），附件 1 的负载 = 附件 2 全年均值（5.04e-5），
+      附件 1 的光伏 ≈ 附件 2 全年均值（0.043，四舍五入所致）。<strong>附件 1 是"典型日"。</strong>
+    </p>
+    <div class="cols">
+      <div class="stat"><span class="k">时段 / 规模</span><span class="v">Δt = 1/6 h</span><span class="s">每日 144 槽 · 全年 365 天 · 报告窗口 334 天</span></div>
+      <div class="stat"><span class="k">储能</span><span class="v">η = 0.9</span><span class="s">往返 0.81 · P<sub>max</sub> 5000 kW · SOC ∈ [1200, 10800] · SOC₀ = 6000</span></div>
+      <div class="stat"><span class="k">紧急购电</span><span class="v">× 5</span><span class="s">缺额按交易时刻电价的 5 倍计</span></div>
+      <div class="stat"><span class="k">终端条件</span><span class="v">SOC<sub>T</sub> = 6000</span><span class="s">全年能量中性（队伍自加约定，各方案一视同仁）</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">§2</span>核心证据</h2>
+
+    <figure>
+      <div class="chart">
+        <!-- 比例尺：x=230 为 12M，每 100 万元 = 90px，x=860 为 19M -->
+        <svg viewBox="0 0 950 340" role="img" aria-label="四份计划的可达区间与报出值对比">
+          <g font-family="IBM Plex Mono, monospace" font-size="12.5">
+            <rect x="4" y="9" width="22" height="11" rx="2.5" style="fill:var(--accent-soft);stroke:var(--accent)" stroke-width="1"/>
+            <text x="32" y="19" style="fill:var(--muted)">可达区间 (C) 下界 → (B) 诚实执行</text>
+            <path d="M286 9 l6 5.5 -6 5.5 -6 -5.5 z" style="fill:var(--ink)"/>
+            <text x="300" y="19" style="fill:var(--muted)">计划报出值 (A)</text>
+            <path d="M428 9 l6 5.5 -6 5.5 -6 -5.5 z" style="fill:var(--bad)"/>
+            <line x1="444" y1="14.5" x2="472" y2="14.5" style="stroke:var(--bad)" stroke-width="2" stroke-dasharray="4 3"/>
+            <text x="480" y="19" style="fill:var(--muted)">报出值低于下界 = 不可能</text>
+          </g>
+
+          <g style="stroke:var(--line)" stroke-width="1">
+            <line x1="320" y1="46" x2="320" y2="286"/>
+            <line x1="410" y1="46" x2="410" y2="286"/>
+            <line x1="500" y1="46" x2="500" y2="286"/>
+            <line x1="590" y1="46" x2="590" y2="286"/>
+            <line x1="680" y1="46" x2="680" y2="286"/>
+            <line x1="770" y1="46" x2="770" y2="286"/>
+          </g>
+          <line x1="230" y1="286" x2="860" y2="286" style="stroke:var(--line-strong)" stroke-width="1"/>
+
+          <!-- 完美预见下界参考线 -->
+          <line x1="250.7" y1="46" x2="250.7" y2="286" style="stroke:var(--brass)" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <text x="256" y="302" font-family="IBM Plex Mono, monospace" font-size="11.5" style="fill:var(--brass)">12.23M 完美预见下界</text>
+
+          <g font-family="IBM Plex Mono, monospace" font-size="12.5" text-anchor="middle" style="fill:var(--muted)">
+            <text x="230" y="320">12M</text>
+            <text x="320" y="320">13M</text>
+            <text x="410" y="320">14M</text>
+            <text x="500" y="320">15M</text>
+            <text x="590" y="320">16M</text>
+            <text x="680" y="320">17M</text>
+            <text x="770" y="320">18M</text>
+            <text x="860" y="320">19M</text>
+          </g>
+
+          <g font-family="IBM Plex Sans, PingFang SC, Microsoft YaHei, sans-serif" font-size="12.5" style="fill:var(--ink-2)">
+            <text x="4" y="73">完美预见（下界）</text>
+            <text x="4" y="133">点预测方案</text>
+            <text x="4" y="193" style="fill:var(--ink)" font-weight="600">现交付 result2</text>
+            <text x="4" y="253">新模型 γ=1</text>
+          </g>
+
+          <!-- 行1 完美预见：C=B=A=12,229,461 → 退化成一个点 -->
+          <line x1="250.7" y1="59" x2="250.7" y2="79" style="stroke:var(--brass)" stroke-width="3" stroke-linecap="round"/>
+          <path d="M250.7 63 l6 6 -6 6 -6 -6 z" style="fill:var(--ink)"/>
+
+          <!-- 行2 点预测：C=470.2 B=685.6 A=508.5 -->
+          <rect x="470.2" y="120" width="215.4" height="18" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)" stroke-width="1"/>
+          <path d="M508.5 123 l6 6 -6 6 -6 -6 z" style="fill:var(--ink)"/>
+
+          <!-- 行3 现交付 SP：C=531.2 B=840.1 A=394.9 ← 报出值落在下界左侧 -->
+          <rect x="531.2" y="180" width="308.9" height="18" rx="3" style="fill:var(--bad-soft);stroke:var(--bad)" stroke-width="1"/>
+          <line x1="394.9" y1="189" x2="531.2" y2="189" style="stroke:var(--bad)" stroke-width="2" stroke-dasharray="5 4"/>
+          <line x1="394.9" y1="183" x2="394.9" y2="195" style="stroke:var(--bad)" stroke-width="2"/>
+          <path d="M394.9 183 l6 6 -6 6 -6 -6 z" style="fill:var(--bad)"/>
+          <text x="463" y="174" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="11.5" font-weight="600" style="fill:var(--bad)">低 1,514,746</text>
+
+          <!-- 行4 γ=1：C=470.7 B=591.6 A=516.9 -->
+          <rect x="470.7" y="240" width="120.9" height="18" rx="3" style="fill:var(--accent-soft);stroke:var(--accent)" stroke-width="1"/>
+          <path d="M516.9 243 l6 6 -6 6 -6 -6 z" style="fill:var(--ink)"/>
+
+          <g font-family="IBM Plex Mono, monospace" font-size="11.5" style="fill:var(--muted)">
+            <text x="262" y="73">12,229,461</text>
+            <text x="694" y="133">17,062,165</text>
+            <text x="848" y="193">18,779,159</text>
+            <text x="600" y="253">16,017,281</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>
+        每行一条计划。浅色带是该计划<strong>真正可达</strong>的费用区间：左端 (C) 是固定其 ĝ 后的物理下界，
+        右端 (B) 是照抄计划表执行的诚实成本。菱形 (A) 是计划自己报出的数。
+        前三行中只有"现交付 result2"的菱形落在色带<strong>左侧之外</strong> —— 它报的数比物理下界还低。
+      </figcaption>
+    </figure>
+
+    <h3>计划 × 执行口径交叉表</h3>
+    <div class="tablewrap">
+      <table>
+        <caption>统计窗口 2/1–12/31（334 天）· 单位：元</caption>
+        <thead>
+          <tr>
+            <th>计划</th>
+            <th class="num">(A) 照抄口径</th>
+            <th class="num">(B) 诚实执行</th>
+            <th class="num">(C) 同 ĝ 完美预见</th>
+            <th class="num">放电被限 kWh</th>
+            <th>判定</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>完美预见（下界）</td>
+            <td class="num">12,229,461</td><td class="num">12,229,461</td>
+            <td class="num">12,229,461</td><td class="num">0</td>
+            <td><span class="pill neutral">基准</span></td>
+          </tr>
+          <tr class="rowgood">
+            <td>点预测（负荷同星期几 4 周 + 光伏近 7 天）</td>
+            <td class="num">15,094,675</td><td class="num">17,062,165</td>
+            <td class="num">14,668,624</td><td class="num">331,427</td>
+            <td><span class="pill good">非不可能</span></td>
+          </tr>
+          <tr class="rowbad">
+            <td>现交付 result2（两阶段 SP）</td>
+            <td class="num">13,832,465</td><td class="num">18,779,159</td>
+            <td class="num">15,347,211</td><td class="num">914,735</td>
+            <td><span class="pill bad">不可能</span></td>
+          </tr>
+          <tr class="rowgood">
+            <td>新模型 γ=1 可交付计划（§4）</td>
+            <td class="num">15,187,755</td><td class="num">16,017,281</td>
+            <td class="num">14,674,852</td><td class="num">139,991</td>
+            <td><span class="pill good">非不可能</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>对"随机规划优于点预测"的证伪</h3>
+    <p>
+      把两份计划的<strong>日前购电量 ĝ</strong> 摘出来，用同一把尺子（(C) 同 ĝ 完美预见）量：
+      点预测方案的 ĝ 值 14,668,624 元，现交付两阶段 SP 的 ĝ 值 <strong>15,347,211 元</strong> ——
+      储能层拉平之后，SP 的购电计划<strong>被点预测方案占优 678,587 元</strong>。
+    </p>
+    <p>
+      所谓"相对点预测节省 8.36%"（13,832,465 vs 15,094,675），是把 (B) 口径的数与 (A) 口径的数相减，
+      而其中 (A) 那个数根本不可实现。
+    </p>
+
+    <h3>根因</h3>
+    <pre><span class="cm"># 代码/problem2_stochastic.py 的 SOC 递推（原文注释）</span>
+<span class="cm"># 等式：SOC 递推（T 行）。充电按【场景平均】E[c̄] 计入：</span>
+<span class="cm">#   S_{t+1} − S_t − ETA·Δt·(1/K_d)·Σ_ω c̄_{t,ω} + (Δt/ETA)·d̂_t = 0</span>
+
+d̂_t   <span class="cm">← 一阶段变量：0:00 就承诺下去的放电功率</span>
+E[c̄]  <span class="cm">← 情景平均：一个不存在的"平均场景"的充电量</span>
+真实充电  c ≤ max(0, P + ĝ + d − L)   <span class="cm">← 缺电情景里恒为 0</span></pre>
+    <p>
+      <span style="font-family:var(--mono)">d̂_t</span> 与 <span style="font-family:var(--mono)">E[c̄]</span>
+      被放进了同一个等式，于是实际 SOC 轨迹严格低于计划 SOC 轨迹，缺口随缺电情景累积，
+      <span style="font-family:var(--mono)">d̂</span> 承诺的电就放不出来。
+      这不是数值误差，是<strong>模型层的口径不一致</strong>：计划层（一阶段承诺）与执行层（情景内实现）
+      用了两套储能物理。commit <code>abd42f6</code> 的提交信息本身已把这一点记为未解决问题。
+    </p>
+  </section>
+
+  <section>
+    <h2><span class="n">§3</span>替代算法一 · 储能降为追索变量</h2>
+    <p>
+      <strong>日前 0:00 真正需要承诺的只有购电量 ĝ<sub>t</sub>。</strong>
+      储能充放电 c、d 与紧急购电 e 本来就由当天实际负荷/光伏决定，
+      把它们写成一阶段承诺量，正是 §2 病根所在。
+    </p>
+    <pre>min_{ĝ ≥ 0}   Σ_t p_t ĝ_t Δt  +  (1/K) Σ_ω [ Σ_t 5 p_t e_{t,ω} Δt ]
+
+s.t.  逐情景 ω：
+      SOC 递推     S_{t+1,ω} = S_{t,ω} + η Δt c_{t,ω} − (Δt/η) d_{t,ω},  S_{0,ω} = S
+      SOC 区间     1200 ≤ S_{t,ω} ≤ 10800
+      功率         0 ≤ c_{t,ω}, d_{t,ω} ≤ 5000
+      <b>能量平衡     c_{t,ω} − ĝ_t − d_{t,ω} − e_{t,ω} ≤ P_{t,ω} − L_{t,ω}</b>   ← 唯一耦合约束
+      非负         e_{t,ω} ≥ 0</pre>
+    <p>
+      能量平衡是唯一必需的耦合约束：取 <span style="font-family:var(--mono)">c = 0</span> 即得
+      <span style="font-family:var(--mono)">e ≥ L − P − ĝ − d</span>（"紧急购电只补负载缺口"，无需另写）；
+      同时保证任何充进电池的电都必须先被买到、或由光伏/放电提供。
+    </p>
+
+    <div class="note">
+      <p><b>必须写下来的陷阱。</b>很容易把能量平衡写成"充电只吃富余"<span style="font-family:var(--mono)"> c ≤ ĝ + d + (P − L)</span>。这是错的，而且是<strong>静默错</strong>：</p>
+      <ol class="steps" style="margin-top:10px">
+        <li>写成裸 <span style="font-family:var(--mono)">c ≤ ĝ + d + (P−L)</span>：因 <span style="font-family:var(--mono)">c ≥ 0</span>，
+          该式<strong>迫使 ĝ + d ≥ L − P</strong>，等于在每个情景里取消了紧急购电通道；且任何固定 ĝ 的执行 LP 立刻不可行。</li>
+        <li>改成 <span style="font-family:var(--mono)">c ≤ ĝ + d + max(0, P−L)</span>：在缺电时段退化为
+          <span style="font-family:var(--mono)">c ≤ ĝ + d</span>，而 e 同时还要补 <span style="font-family:var(--mono)">L−P−ĝ−d</span> ——
+          同一份 ĝ + d 既顶负载缺口又给电池充电，<strong>净凭空造电</strong>。实测全年总费掉到 2,773,754 元，
+          远低于完美预见下界 12,229,461 元。</li>
+      </ol>
+      <p style="margin-top:12px">这类错误的共同特征是<strong>结果看起来更好</strong>，只有拿"完美预见下界"当哨兵才抓得住 —— 这也正是 §2 那个 bug 能活到交付文件的原因。</p>
+    </div>
+
+    <h3>终端条件</h3>
+    <p>
+      不要用"末端 SOC 的影子价格 λ"当值函数割平面近似 <span style="font-family:var(--mono)">V(S) ≈ λ·S</span>：
+      只要 λ &gt; 0，日末 SOC 恒被灌到上限 10800，一维打靶<strong>没有内点解</strong>，是退化的。
+      改用<strong>日能量中性</strong> <span style="font-family:var(--mono)">S<sub>T,ω</sub> = S</span> ——
+      全年能量中性的按日版本，无需标定、无歧义。在每日电价相同的问题 2 里跨日套利没有价格信号，逐日中性近似最优。
+    </p>
+
+    <h3>执行层与实测</h3>
+    <p>
+      <strong>EXEC=oracle</strong> 给储能日内完美预见 —— 不可实现，只当该政策的下界用。
+      <strong>EXEC=mpc</strong> 是因果滚动 MPC：每 6 槽重解一次长度 36 槽的 LP，只执行当前槽；
+      时域末端 SOC <strong>跟踪日前计划轨迹</strong>，不能钉回"当前 SOC"（否则放电被执行、配套充电被实际富余削掉，
+      电池单向漏空：实测年末 SOC 掉到 1212 kWh、总费 32.8 M 元）。
+    </p>
+    <div class="tablewrap">
+      <table>
+        <caption>追索模型实测 · 334 天窗口</caption>
+        <thead>
+          <tr><th>配置</th><th class="num">计划购电费</th><th class="num">紧急购电费</th><th class="num">紧急 kWh</th><th class="num">总费</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>追索 + oracle 执行 <span style="color:var(--muted)">（不可实现的下界）</span></td>
+            <td class="num">13,220,622</td><td class="num">1,393,202</td><td class="num">412,901</td><td class="num">14,613,824</td></tr>
+          <tr><td>追索 + 因果 MPC <span style="color:var(--muted)">（可实现）</span></td>
+            <td class="num">13,228,465</td><td class="num">4,871,990</td><td class="num">965,328</td><td class="num">18,100,455</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px">
+      oracle 行的 14,613,824 元高于完美预见下界 12,229,461 元，说明模型没有造电，可信。
+      但因果 MPC 行的 18,100,455 元说明：<strong>瓶颈已经不在计划层，而在执行层</strong>。
+      把情景集从 4 扩到 8、12，MPC 反而更差（20.29 M、21.95 M），因为跟踪目标随 K 增大而与实际当日偏离更远。
+    </p>
+    <p><strong>如实结论：追索式建模在计划层是正确的，但本条给出的因果执行策略还打不过下面那个保守开环方案。</strong></p>
+  </section>
+
+  <section>
+    <h2><span class="n">§4</span>替代算法二 · γ 可交付储能计划</h2>
+    <p>
+      如果需要一个<strong>开环、可复算、无模拟歧义</strong>的交付，把 SOC 递推里的
+      <span style="font-family:var(--mono)">E[c̄]</span> 换成"对覆盖率 γ 分位保证的可得充电"：
+    </p>
+    <pre>c_t^min ≤ ĝ_t + d̂_t + q_{γ,t},    q_{γ,t} = { P_{ω,t} − L_{ω,t} } 的 (1−γ) 分位</pre>
+    <p style="margin-top:14px">
+      γ=1 ⟹ <span style="font-family:var(--mono)">q = min<sub>ω</sub>(P−L)</span>（全情景可交付）。
+      目标函数仍是 <span style="font-family:var(--mono)">E[e]</span> 的精确值（e 只依赖 (ĝ, d̂)，与 SOC 无关），
+      所以给定 (ĝ, d̂) 的总费是<strong>闭式</strong>的 —— 消除了口径歧义。
+    </p>
+    <div class="tablewrap">
+      <table>
+        <caption>γ 扫描 · 只有 γ=1 那一行可引用为可达</caption>
+        <thead>
+          <tr><th>γ 覆盖率</th><th class="num">计划费</th><th class="num">紧急费</th><th class="num">紧急 kWh</th><th class="num">总费</th><th>情景内可交付</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="num" style="text-align:left">0.50</td><td class="num">12,388,495</td><td class="num">1,421,984</td><td class="num">331,264</td><td class="num">13,810,479</td><td><span class="pill bad">否</span></td></tr>
+          <tr><td class="num" style="text-align:left">0.75</td><td class="num">13,042,809</td><td class="num">1,413,292</td><td class="num">328,031</td><td class="num">14,456,101</td><td><span class="pill bad">否</span></td></tr>
+          <tr class="rowgood"><td class="num" style="text-align:left">1.00</td><td class="num">13,789,170</td><td class="num">1,398,586</td><td class="num">323,185</td><td class="num">15,187,755</td><td><span class="pill good">是</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="note" style="margin-top:20px">
+      <p><b>重要保留。</b>γ=1 的保证是<strong>对建模情景集</strong>（同星期几的 4 个历史日），不是分布无关的。
+      对全年 334 个实测日重放：按计划 c<sup>min</sup> 执行得 <strong>16,017,281 元</strong>（放电被限 139,991 kWh）；
+      充电按 SOC 受限下的最优管理得 <strong>15,389,997 元</strong>（放电被限 30,677 kWh）。
+      两种口径下真实 SOC 最小值都恰为 1200（下限）。</p>
+      <p style="margin-top:10px">如实报告时应取 <strong>15.39–16.02 M 元</strong>这个区间，而非 15,187,755。</p>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">§5</span>既有归档文档已过期</h2>
+    <p>
+      <code>文档/问题2_求解归档.md</code> 与 <code>文档/问题2_最优性论证.md</code> 中的数字与当前代码不一致。
+      重跑 <code>代码/problem2_stochastic.py</code> 得到：
+    </p>
+    <div class="tablewrap">
+      <table>
+        <caption>重跑 problem2_stochastic.py 的实际输出</caption>
+        <thead>
+          <tr><th>方案</th><th class="num">计划费</th><th class="num">紧急费</th><th class="num">紧急 kWh</th><th class="num">总费</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>完美预见（下界）</td><td class="num">—</td><td class="num">—</td><td class="num">0</td><td class="num">12,229,461</td></tr>
+          <tr><td>点预测（负荷同星期几 + 光伏近 7 天）</td><td class="num">12,202,243</td><td class="num">2,892,432</td><td class="num">681,148</td><td class="num">15,094,675</td></tr>
+          <tr><td>随机规划 · 实际轨迹</td><td class="num">12,413,551</td><td class="num">1,418,914</td><td class="num">329,944</td><td class="num">13,832,465</td></tr>
+          <tr><td>随机规划 · 期望总费用</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">13,635,983</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:14px">
+      <code>文档/问题2_最优性论证.md</code> 的结论建立在"随机规划 13,832,465 &lt; 点预测 15,094,675"之上，
+      而 13,832,465 这个数按 §2 不可实现，论证链条需要重做。
+    </p>
+  </section>
+
+  <section>
+    <h2><span class="n">§6</span>自查记录</h2>
+    <p>
+      本文模型自身修掉的 6 个 bug 全部属于"结果看起来更好"的静默错，列出以便复核者信任其余数字。
+      其中第 4 条与队伍的病根属同一类。
+    </p>
+    <ol class="steps">
+      <li>SOC 递推首行右端误置为 <span style="font-family:var(--mono)">S</span> ——
+        S₀ 已由边界钉死，该式把 S₁ 顶到 2S = 12000 &gt; 10800，不可行。</li>
+      <li>边界列表顺序写成 <span style="font-family:var(--mono)">g|c|d|e|SOC</span>，变量布局却是
+        <span style="font-family:var(--mono)">g|c|d|SOC|e</span> —— SOC 拿到 (0, None) 而 e 拿到 SOC 边界，
+        配上 −λ·SOC<sub>T</sub> 目标即为无界。HiGHS 报 "unbounded"，被断言误标成 "infeasible"。</li>
+      <li>不等式行块布局是 [r1 全部, r2 全部]，<span style="font-family:var(--mono)">b_ub</span> 却按
+        [s0,s0,s1,s1,…] 交替拼 —— 情景 0 恰好正确，掩盖了错误。</li>
+      <li>"充电只吃富余"的两种写法，见 §3 的陷阱说明。</li>
+      <li>λ 割平面终端条件退化（§3 终端条件）。</li>
+      <li>MPC 时域末端钉回当前 SOC 导致电池单向漏空（§3 执行层）。</li>
+    </ol>
+    <p style="margin-top:14px">
+      另：环境变量 <code>TERM</code> 与 shell 的终端类型变量重名，一度让终端条件开关静默失效；已改名 <code>P2_TERM</code>。
+    </p>
+  </section>
+
+  <section>
+    <h2><span class="n">§7</span>对论文的修改建议</h2>
+    <ol class="steps">
+      <li><strong>不要报 13,832,465 元。</strong>它低于任何执行策略可达的下界。</li>
+      <li>若要保留"随机规划优于点预测"的叙事，<strong>前提是重做模型</strong>：按 §3 把储能降为追索变量，
+        并给出<strong>因果执行策略</strong>的成本，而不是照抄 d̂。</li>
+      <li>若要一个稳的交付数字，用 §4 的 γ=1 计划，报 15.19 M（情景内）/ 15.39–16.02 M（全年实测）。</li>
+      <li>无论走哪条路，<strong>必须同时报"完美预见下界"</strong>（12,229,461 元）作为哨兵 ——
+        本文实现过程中三次造出低于该下界的结果，全部是 bug。</li>
+    </ol>
+  </section>
+
+  <hr>
+
+  <div class="foot">
+    <h3 style="margin-top:0">复算代码与声明</h3>
+    <p>
+      <code>代码/独立视角/audit.py</code> 计划 × 执行口径交叉表 ·
+      <code>代码/独立视角/p2_deliver.py</code> γ 可交付储能计划 ·
+      <code>代码/独立视角/p2_recourse.py</code> 储能作追索 + 滚动执行。
+      三者均不 import 队伍的求解器。
+    </p>
+    <p>
+      复核期间为独立复算执行过 <code>代码/problem2_stochastic.py</code>，它按设计写回了
+      <code>结果/result2.xlsx</code>。该文件在 git 中已跟踪，diff 为 415,990 → 415,989 字节（1 字节），
+      数值内容一致。如需回滚：<code>git checkout -- 结果/result2.xlsx</code>。
+      未运行 <code>代码/problem3_v2.py</code>，<code>结果/result3.xlsx</code> 未被触碰。
+      新增文件仅位于 <code>代码/独立视角/</code>，未修改队伍任何求解器。
+    </p>
+  </div>
+
+</div>
