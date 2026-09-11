@@ -228,15 +228,6 @@ def read_emerg(wb, date):
     return out
 
 
-def est_emerg_from_plan(g_kwh, date):
-    """由计划购电量复算当日紧急购电量（供交叉检查）：e = max(0, L − g − P − d)。"""
-    dL = pd.read_excel(os.path.join(BASE, "附件", "附件2.xlsx"), sheet_name="小区负载")
-    dP = pd.read_excel(os.path.join(BASE, "附件", "附件2.xlsx"), sheet_name="光伏发电实际功率")
-    di = (date - dt.date(2025, 1, 1)).days
-    return np.maximum(0.0, dL.iloc[di, 1:145].to_numpy(float)
-                      - g_kwh * 6.0 - dP.iloc[di, 1:145].to_numpy(float))
-
-
 def tables_p23(prob, use_plan=False):
     fn = f"result{prob}.xlsx"
     wb = openpyxl.load_workbook(os.path.join(BASE, "结果", fn))
