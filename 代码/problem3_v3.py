@@ -55,6 +55,9 @@
  [计划] ĝ_t = F̂_t^(0档) + Q_τ({ need_{q,t} − F̂_{q,t}^(0档) }_{q<d})，clip 到 [0,Pmax]。
         报童不动点：d 依赖 ĝ，故残差分布随 ĝ 变，只能在线迭代（每天用截至昨天的残差
         重算分位）。v2 的 HEDGE_NPY 钩子指向的就是这个对象，但从未实现、且分位非因果。
+        ⚠ F̂ = L_base − P̂ 里的 **L_base 已改为按低需求日分组**（缺省 {周五,周六}，
+        回看 7 天 = 上周五+上周六）。残差分位 h 的取样集**仍用全部历史日池化** ——
+        两处分开对待的依据与实测见下面 L_base 口径那段注释（残差那一路分组有害）。
  [调整] 6/12/18：g_e = clip(max(ĝ, F̂^(e档) + Q_{τ'}({need − F̂^(e档)}_{q<d})), 0, Pmax)
         τ' = 0.7 由可调段一阶条件 1.5p = 5p(1−F(g)) 给出（§3）。
  [执行] 逐槽滚动 MPC：当前槽用**实测**净需求，未来槽用**该时刻最新一档预报**；
@@ -200,11 +203,90 @@ def pv_fc(d, s):
 
 P_hat = np.stack([[pv_fc(d, s) for s in range(4)] for d in range(NDAYS)])    # (365,4,144)
 
-K_PEERS = 4
+# ── 净需求基线的构造口径（低需求日分组，定稿 2026-09-11）──────────────────
+# 这是问题 2「情景集」在问题 3 里的对应物。**两个位置必须分开对待**：
+#   (a) `L_base`（净需求气候基线）——分组**有效**；
+#   (b) `run()` 里残差分位 h 的取样集 —— 分组**有害**（实测，见下）。
+#
+# 数据依据：按暖机期（前 31 天，在计费窗口之前）的日均净负荷，七天分成
+# 【低需求日】与【其余】两组，本数据推出 {周五, 周六}（Fri 254,734 / Sat 256,970
+# vs 其余五天 526,753–537,426 kWh/日）。周五与周六需求水平相近 ⟹ 可互相借用，
+# 基线样本翻倍且更近。
+#
+# 实测（`G ≤ 5000`，计费窗口 334 天，口径 A 实际执行总费）：
+#     现状 L_base=同星期几 K=4                     14,712,825
+#     分组 span7（定稿）                           14,285,731   −427,094（−2.90%）
+#     同星期几 K=1（同为 1 周前，去掉分组）          14,560,628
+#   ⟹ 去掉近期性后的纯分组效应 −274,896，块自助 95% CI [−1,062,−606]，p<0.001，
+#      中位日 −469，281/334 天更便宜，剔最省 20 天仍 −167,116。
+#   span7 是「上周五+上周六」两个同组日的**下限**（再短就一个同组日都没有）。
+#
+# ⚠ 反直觉负结果，务必不要"顺手也分组"：残差分位 h 的取样集若也改成同组，
+#   总费反而升到 14,727,742（+14,916 vs 现状）；放开 MINR 真正激活它则升到
+#   14,497,978，比只改 L_base 差 141,322，且与 K=2 的干净检验 p=0.257 **不显著**。
+#   原因：问题三里预报残差的**绝对尺度两组几乎相同**（逐槽 std 437 vs 422 kWh），
+#   池化分位与分组分位只差 10–43 kWh/槽 —— 与问题 2（周五周六净负荷仅为其余日的
+#   1/3）完全不同。故 H_SRC 缺省恒为 "all"。
+#
+#   P3_GRP="auto"|"2,3"|"0,1,2,3,4,5,6"|""  低需求日分组；"auto" 用暖机期推导；
+#                      全部七天 = 不分组但按窗口截断；"" = 关闭分组
+#   P3_GSPAN=7         分组回看天数；0 = 扩张窗口（用全部历史）
+#   P3_GBASE=1         L_base 是否用分组口径（0 = 关，回到同星期几）
+#   P3_KPEERS=4        同星期几回看周数（仅 GRP_BASE=0 时生效）
+#   P3_HSRC="all"      残差取样集："all" = 全部历史日池化（定稿）；"group" = 同组
+K_PEERS = int(os.environ.get("P3_KPEERS", 4))
+
+DOW_NAME = ["Wed", "Thu", "Fri", "Sat", "Sun", "Mon", "Tue"]
+
+
+def _low_demand_dows(train_days):
+    """按日均净负荷把七天分成【低需求日】与【其余】两组。
+
+    只喂暖机期（前 REPORT 天，在计费窗口之前）⟹ 推导不含前视，与问题 2 同一套规则。
+    """
+    nl = (load - pv).sum(axis=1)
+    dw = np.array([d % 7 for d in range(NDAYS)])
+    means = np.array([nl[train_days][dw[train_days] == k].mean() for k in range(7)])
+    o = np.argsort(means)
+    return (int(o[0]), int(o[1])), means
+
+
+_GRP_ENV = os.environ.get("P3_GRP", "auto")
+GRP_SPAN = int(os.environ.get("P3_GSPAN", 7))
+GRP_BASE = bool(int(os.environ.get("P3_GBASE", 1)))
+H_SRC = os.environ.get("P3_HSRC", "all")
+DOW_MEANS = None
+if not _GRP_ENV:
+    GRP_DOWS = ()                                  # P3_GRP= 空 ⟹ 关闭分组
+elif _GRP_ENV.strip().lower() == "auto":
+    _warm = np.arange(0, REPORT)
+    GRP_DOWS, DOW_MEANS = _low_demand_dows(_warm)
+else:
+    GRP_DOWS = tuple(int(x) for x in _GRP_ENV.split(","))
+
+_m = np.array([(d % 7) in GRP_DOWS for d in range(NDAYS)]) if GRP_DOWS else None
+
+
+def _grp_idx(d):
+    """与第 d 天同组、且落在回看窗口内的历史日（严格 < d）。"""
+    lo = max(0, d - GRP_SPAN) if GRP_SPAN > 0 else 0
+    return [t for t in range(lo, d) if _m[t] == _m[d]]
+
+
+# L_base 的历史日索引：分组口径，或退回同星期几 K。
+if GRP_DOWS and GRP_BASE:
+    LB_IDX = [_grp_idx(d) for d in range(NDAYS)]
+else:
+    LB_IDX = [[d - 7 * k for k in range(1, K_PEERS + 1) if d - 7 * k >= 0]
+              for d in range(NDAYS)]
+
+# 残差分位 h 的取样索引。缺省全部历史日；H_SRC="group" 才按同组取（实测有害，仅作对照）。
+SRC_IDX = [_grp_idx(d) for d in range(NDAYS)] if (GRP_DOWS and H_SRC == "group") \
+    else [[t for t in range(0, d)] for d in range(NDAYS)]
+
 L_base = np.zeros_like(load)
 for d in range(NDAYS):
-    idx = [d - 7 * k for k in range(1, K_PEERS + 1) if d - 7 * k >= 0]
-    L_base[d] = load[idx].mean(axis=0) if idx else load.mean(axis=0)
+    L_base[d] = load[LB_IDX[d]].mean(axis=0) if LB_IDX[d] else load.mean(axis=0)
 
 F_hat = L_base[:, None, :] - P_hat      # (365,4,144)
 WIN0 = min(REPORT, NDAYS_RUN)
@@ -527,10 +609,17 @@ def run(lam, ndays=None, verbose=False):
             src = net_hist
         else:
             src = need_hist
-        if len(src) >= MINR:
-            H0 = np.array(src) - F_hat[:len(src), 0, :]
+        # 取样口径由 SRC_IDX 决定：缺省（GRP_DOWS 为空）⟹ 全部历史日，与旧码逐字等价。
+        ii = np.array(SRC_IDX[d], dtype=np.int64)
+        if len(ii) < MINR:
+            # 可用样本不足（分组早期）→ 退回全部历史，使这些天与基线逐位相同，
+            # 对照只反映样本充足之后的差别。
+            ii = np.arange(max(d, 1), dtype=np.int64)
+            H0 = actual_net[ii] - F_hat[ii, 0, :]
+        elif len(ii) == 0:
+            H0 = np.zeros((0, N))
         else:
-            H0 = actual_net[:max(d, 1)] - F_hat[:max(d, 1), 0, :]
+            H0 = np.asarray(src)[ii] - F_hat[ii, 0, :]
         # 分位**按块取**：0:00–6:00 不可调整（顶补价 5p ⟹ 临界比 0.8），
         # 6:00 之后的块可用 1.5p 顶补（顶补价降到 1.5p ⟹ 临界比 0.5p/(0.5p+p)=1/3）。
         # 用全天单一 τ 会把这个差别抹平：τ 取低则 0:00 块欠买（只能按 5p 补救），
@@ -617,6 +706,18 @@ def run(lam, ndays=None, verbose=False):
     # ⚠ 报 SOC 区间**必须**用它。plan_day 把每日末端钉在 SOC0，日末序列只覆盖
     #   [2830, 6000]，看上去像电池没在全幅循环 —— 实际日内打满 [1200, 10800]。
     soc_full = np.concatenate([[SOC0], SOC0 + np.cumsum((ETA * c_f - d_f / ETA) * DT)])
+    # 逐日成本（口径 A 四项之和）。诊断脚本用它做配对检验，求解器本身不依赖它。
+    cost_day = ((pr * gh_f * DT) + (0.5 * pr * np.maximum(gh_f - gf_f, 0) * DT)
+                + (1.5 * pr * np.maximum(gf_f - gh_f, 0) * DT)
+                + (5 * pr * e_f * DT)).reshape(nd, N).sum(axis=1)
+    _dump = os.environ.get("P3_DUMP")
+    if _dump:
+        np.savez(_dump, cost_day=cost_day,
+                 em_day=(e_f * DT).reshape(nd, N).sum(axis=1),
+                 gf_day=(gf_f * DT).reshape(nd, N).sum(axis=1),
+                 gh_day=(gh_f * DT).reshape(nd, N).sum(axis=1),
+                 total=plan_fee + breach + excess + em_fee, nd=nd,
+                 win0=WIN0, kwh_em=(e_f * DT)[w].sum())
     return dict(
         total=plan_fee + breach + excess + em_fee,
         plan=plan_fee, breach=breach, excess=excess, emerg=em_fee,
@@ -771,6 +872,17 @@ if __name__ == "__main__":
           f"最高可用档位 {BANDS}（0=0:00, 1=+6:00, 2=+12:00, 3=+18:00）")
     print(f"  天数 {NDAYS_RUN}  计费窗口第 {WIN0 + 1}–{NDAYS_RUN} 天  "
           f"MPC 重解间隔 {MPC_RES} 槽  时域 {H_MAX}")
+    if GRP_DOWS and GRP_BASE:
+        _lab = "全部七天（仅截断窗口）" if len(GRP_DOWS) == 7 \
+            else "{" + ", ".join(DOW_NAME[k] for k in sorted(GRP_DOWS)) + "}"
+        print(f"  L_base 口径：低需求日分组 {_lab}，回看 "
+              f"{GRP_SPAN if GRP_SPAN > 0 else '全部'} 天")
+        if DOW_MEANS is not None:
+            print("    暖机期日均净负荷：" + "  ".join(
+                f"{DOW_NAME[k]}={DOW_MEANS[k]:,.0f}" for k in range(7)))
+    else:
+        print(f"  L_base 口径：同星期几 K={K_PEERS} 均值（未启用分组）")
+    print(f"  残差分位取样：{'同组（实测有害，仅作对照）' if H_SRC == 'group' else '全部历史日池化'}")
     print("=" * 118)
     t0 = time.time()
 
