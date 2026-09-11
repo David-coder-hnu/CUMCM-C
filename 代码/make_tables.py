@@ -13,11 +13,14 @@
   取值会整体错一格；按标签取则每格与自己的标签一致。
   注意末列"0:00-0:10+1"装的是**当天** 0:00-0:10 的值（模板表头旋转所致），
   该列标签是模板侧的不一致，不影响全天合计。
+  result1.xlsx 一样是旋转表头（problem1.py 直接落模板，末列写作 "0:00+1-0:10+1"），
+  所以问题 1 也必须按标签解析（见 rotated_slot_index），不能按下标硬拼标签字符串。
 
-脚本自带三项自检（不通过直接报错，避免把错表抄进论文）：
+脚本自带四项自检（不通过直接报错，避免把错表抄进论文）：
   A. 全天购电量 = 144 个槽位之和；
   B. 全天购电费 = Σ(电价 × 该槽购电量)（问题 1 另加紧急费）；
-  C. 充放电量的 SOC 链连续、且落在 [1200, 10800]。
+  C. 充放电量的 SOC 链连续、且落在 [1200, 10800]；
+  D. 问题 1：按标签直取 与 按旋转映射回填 逐槽一致（防整体错一格）。
 """
 import datetime as dt
 import os
@@ -86,6 +89,29 @@ def slot_key(i):
     return f"{start // 60}:{start % 60:02d}-{end_label}"
 
 
+def rotated_slot_index(label):
+    """把 result1「计划购电量」的旋转表头标签解析成自然槽序索引（0 = 当天 0:00-0:10）。
+
+    result1 直接落的是附件 5 模板的旋转表头：0:10-0:20 起步、到 23:50-0:00+1，
+    末行写成 0:00+1-0:10+1 —— 但按 problem1.py 的写入约定与本文档开头的读表说明，
+    该末行装的是**当天** 0:00-0:10 的值。因此取起始时刻对 1440 取模再 //10 即可
+    统一处理：末行的 0:00+1 → 0 分钟 → 槽 0，无需特判。
+
+    解析失败返回 None（调用方报错），不静默兜底。
+    """
+    norm = normalize_time_label(label)
+    if not isinstance(norm, str) or "-" not in norm:
+        return None
+    left = norm.split("-", 1)[0]
+    if left.endswith("+1"):
+        left = left[:-2]
+    try:
+        hour, minute = left.split(":")
+        return ((int(hour) * 60 + int(minute)) % (24 * 60)) // 10
+    except ValueError:
+        return None
+
+
 def _fmt(x, nd=2):
     return f"{x:,.{nd}f}"
 
@@ -94,14 +120,31 @@ def _fmt(x, nd=2):
 def tables_p1():
     wb = openpyxl.load_workbook(os.path.join(BASE, "结果", "result1.xlsx"))
     wp, wc = wb["计划购电量"], wb["充放电量"]
-    lab2v = {wp.cell(row=r, column=1).value: (wp.cell(row=r, column=2).value or 0.0)
-             for r in range(2, wp.max_row + 1)}
-    if None in lab2v or len(lab2v) != 144:
-        raise SystemExit(f"[自检失败] result1 计划购电量应有 144 个唯一标签，实得 {len(lab2v)}")
+    raw = {wp.cell(row=r, column=1).value: (wp.cell(row=r, column=2).value or 0.0)
+           for r in range(2, wp.max_row + 1)}
+    if None in raw or len(raw) != 144:
+        raise SystemExit(f"[自检失败] result1 计划购电量应有 144 个唯一标签，实得 {len(raw)}")
 
-    g = np.array([lab2v[f"{(i * 10) // 60}:{(i * 10) % 60:02d}-"
-                        f"{(i * 10 + 10) // 60}:{(i * 10 + 10) % 60:02d}"]
-                  if i < 143 else "0:00-0:10+1" for i in range(144)])
+    # 表头是旋转的，必须按标签解析回自然槽序；不能按下标硬拼标签。
+    g = np.zeros(144)
+    seen = set()
+    for lab, v in raw.items():
+        i = rotated_slot_index(lab)
+        if i is None:
+            raise SystemExit(f"[自检失败] result1 无法解析的时间段标签：{lab!r}")
+        if i in seen:
+            raise SystemExit(f"[自检失败] result1 两个标签指向同一槽 {i}：{lab!r}")
+        seen.add(i)
+        g[i] = v
+    if len(seen) != 144:
+        raise SystemExit(f"[自检失败] result1 只覆盖 {len(seen)}/144 个槽")
+
+    # 交叉检查：按标签直取 与 按旋转映射回填 必须一致（防止整体错一格）。
+    for s in SLOTS:
+        i = (int(s[:2]) * 60 + int(s[3:5])) // 10
+        if abs(g[i] - raw[s]) > 1e-9:
+            raise SystemExit(f"[自检失败] {s} 按标签取值 {raw[s]} ≠ 按槽序取值 {g[i]}")
+
     tot = g.sum()
     fee = float((price_day * g).sum())
     print(f"[自检 A] 全天购电量 {tot:,.4f} kWh（144 槽求和）")
@@ -110,7 +153,7 @@ def tables_p1():
     print("\n**表 1　微网在指定时间段的购电量及全天的购电量和购电费**\n")
     print("| 时间段 | 购电量(kWh) | 时间段 | 购电量(kWh) | 时间段 | 购电量(kWh) |")
     print("| --- | ---: | --- | ---: | --- | ---: |")
-    v = [lab2v[s] for s in SLOTS]
+    v = [g[(int(s[:2]) * 60 + int(s[3:5])) // 10] for s in SLOTS]
     print(f"| {SLOTS[0]} | {_fmt(v[0])} | {SLOTS[1]} | {_fmt(v[1])} | {SLOTS[2]} | {_fmt(v[2])} |")
     print(f"| {SLOTS[3]} | {_fmt(v[3])} | {SLOTS[4]} | {_fmt(v[4])} | {SLOTS[5]} | {_fmt(v[5])} |")
     print(f"| **全天购电量** | **{_fmt(tot)}** | **全天购电费** | **{_fmt(fee)} 元** | | |")
@@ -126,8 +169,13 @@ def tables_p1():
         c2 = wc.cell(row=b[b_], column=2).value or 0
         d2 = wc.cell(row=b[b_], column=3).value or 0
         print(f"| {BLOCKS[a_]} | {_fmt(c1)} | {_fmt(d1)} | {BLOCKS[b_]} | {_fmt(c2)} | {_fmt(d2)} |")
-    s0 = wc.cell(row=b[0], column=5).value
-    s24 = wc.cell(row=b[1], column=5).value
+    # 模板把两个时点标签放在「时刻」列：'0:00' 在第 1 个块行、'24:00' 在第 2 个块行。
+    # 按标签取，别按行号猜。
+    marks = {wc.cell(row=r, column=4).value: wc.cell(row=r, column=5).value
+             for r in range(2, wc.max_row + 1)}
+    if marks.get("0:00") is None or marks.get("24:00") is None:
+        raise SystemExit(f"[自检失败] result1 充放电量缺储电量：{marks}")
+    s0, s24 = marks["0:00"], marks["24:00"]
     print(f"| **0:00 储电量** | **{_fmt(s0)}** | | **24:00 储电量** | **{_fmt(s24)}** | |")
 
 
