@@ -15,6 +15,13 @@ import pandas as pd
 from scipy.optimize import linprog
 from scipy import sparse
 
+# Windows 下 stdout 重定向到文件/管道时默认走 GBK，打印 ĝ(U+011D) 等字符会抛
+# UnicodeEncodeError 并打断脚本（前面的求解其实已算完）。统一改 UTF-8。
+import sys as _sys
+for _s in (_sys.stdout, _sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
+
 DT, ETA, P_MAX = 1.0 / 6.0, 0.9, 5000.0
 SOC_MIN, SOC_MAX, SOC0 = 1200.0, 10800.0, 6000.0
 N, NDAYS, REPORT = 144, 365, 31

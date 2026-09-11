@@ -14,6 +14,13 @@ import importlib.util
 from scipy.optimize import linprog
 from scipy import sparse
 
+# Windows 下 stdout 重定向到文件/管道时默认走 GBK，打印 ĝ(U+011D) 等字符会抛
+# UnicodeEncodeError 并打断脚本（前面的求解其实已算完）。统一改 UTF-8。
+import sys as _sys
+for _s in (_sys.stdout, _sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
+
 spec = importlib.util.spec_from_file_location('p3s', '代码/p3_stoch.py')
 M = importlib.util.module_from_spec(spec); spec.loader.exec_module(M)
 

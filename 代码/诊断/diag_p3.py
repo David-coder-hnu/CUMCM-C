@@ -9,6 +9,13 @@ import os
 import numpy as np
 import pandas as pd
 
+# Windows 下 stdout 重定向到文件/管道时默认走 GBK，打印 ĝ(U+011D) 等字符会抛
+# UnicodeEncodeError 并打断脚本（前面的求解其实已算完）。统一改 UTF-8。
+import sys as _sys
+for _s in (_sys.stdout, _sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
+
 DT = 1.0 / 6.0
 N = 144
 NDAYS = 365

@@ -50,6 +50,13 @@ from scipy.optimize import linprog
 from scipy import sparse
 import openpyxl
 
+# Windows 下 stdout 被重定向到文件/管道时默认走 GBK，打印 ĝ(U+011D) 这类字符会抛
+# UnicodeEncodeError 并把整个脚本打断在最后一段汇总里（前面的求解其实已经算完）。
+# 统一改 UTF-8，保证 `python 代码/problem3_v2.py > log.txt` 也能跑到底。
+for _s in (sys.stdout, sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
+
 DT = 1.0 / 6.0
 ETA = 0.9
 P_MAX = 5000.0
@@ -309,6 +316,11 @@ if NO_ADJ:
     HEDGE = np.quantile(resid[:, 0, :], float(os.environ.get("Q_ALL", 0.89)), axis=0)
 if os.environ.get("PLAN_R0"):             # 变体：计划只按 0:00 档残差对冲（更宽），靠日内下修回收
     HEDGE = np.quantile(resid[:, 0, :], Q_ADJ, axis=0)
+if os.environ.get("HEDGE_NPY"):           # 逐时段最优对冲：由 diag_hedge_fixpoint.py 迭代产生
+    # 依据报童一阶条件：min ĝ  ⇒  P(N_t − d_t > ĝ_t) = 1/5，故最优对冲是"电池放电后
+    # 残余缺口"的 80 分位，而非净需求的 80 分位。该向量只能靠仿真做不动点迭代得到。
+    HEDGE = np.load(os.environ["HEDGE_NPY"])
+    assert HEDGE.shape == (N,), f"HEDGE 形状应为 ({N},)，实得 {HEDGE.shape}"
 N_plan = F_hat[:, 0, :] + HEDGE[None, :]
 
 PLAN = os.environ.get("PLAN", "sp")     # sp = 两阶段随机规划（定稿）；lp = 旧确定性 LP + 对冲
@@ -323,8 +335,13 @@ else:
 soc_mid = soc_hat[::N]
 
 # 诊断：把 0:00 计划 ĝ 换成别处已有的方案（用于分离"计划选得好不好"与"日内调整行不行"）。
-# 已知定理：ĝ 取问题 2 的方案、且不做任何调整时，总费应恰好等于问题 2 的 13,832,465 元；
-# 问题 3 有更多信息（附件 3 预报）和更软的罚则（0.5p/1.5p < 5p），故最优值必 ≤ 该数。
+# 已知关系：问题 3 相对问题 2 多了 6/12/18 三个调整机会，偏差罚则也更软
+# （0.5p / 1.5p < 5p），故在同一 ⟨ĝ, 执行层⟩ 下，问题 3 的最优值必 ≤ 问题 2。
+#   实测：问题 2 = 本脚本 NO_ADJ=1 → 18,300,549（朴素）/ 17,149,812（MPC）
+#         问题 3 = 15,715,709（MPC）—— 方向一致，调整通道价值 1,434,103 元。
+# ⚠ 旧注释在此写过一条"定理"：ĝ 取问题 2 的方案且不调整时总费应恰等于 13,832,465 元。
+#   该"定理"是错的：13,832,465 低于同一 ĝ 下的完美预见储能下界（15,347,211 元），
+#   不存在能实现它的因果执行策略；实测同 ĝ 不调整为 18,300,549 / 17,149,812。
 if os.environ.get("GHAT_FROM"):
     _src = os.environ["GHAT_FROM"]
     _ws = openpyxl.load_workbook(os.path.join(BASE, "结果", _src))["计划购电量"]
@@ -339,8 +356,16 @@ print(f"[0:00 计划] 带对冲 LP 完成，{time.time() - t0:.1f}s，"
       f"计划购电量 {g_hat[win].sum() * DT:,.0f} kWh")
 print(f"  诊断：窗口内负载 {load.ravel()[win].sum() * DT:,.0f} kWh，"
       f"光伏 {pv.ravel()[win].sum() * DT:,.0f} kWh，"
-      f"净需求 {F_hat[:, 0, :].ravel()[win].sum() * DT:,.0f} kWh，"
-      f"对冲量合计 {HEDGE[None, :].repeat(NDAYS, 0).ravel()[win].sum() * DT:,.0f} kWh")
+      f"净需求 {F_hat[:, 0, :].ravel()[win].sum() * DT:,.0f} kWh")
+if PLAN == "lp":
+    print(f"  诊断：对冲量合计 {HEDGE[None, :].repeat(NDAYS, 0).ravel()[win].sum() * DT:,.0f} kWh")
+else:
+    # ⚠ PLAN="sp" 时 HEDGE 根本不参与求解（它只喂给 PLAN="lp" 的 solve_annual），
+    #   所以这里不能再叫"对冲量"——否则会被误读成"SP 计划里含了多少对冲"。
+    #   改报 SP 自己的计划 SOC 路径统计，那才是该计划层真正产出的东西。
+    print(f"  诊断：SP 计划 SOC 路径 [{soc_hat.min():.0f}, {soc_hat.max():.0f}] kWh，"
+          f"日末锚点 soc_mid [{soc_mid.min():.0f}, {soc_mid.max():.0f}] kWh"
+          f"（HEDGE 在本路径下未被使用）")
 
 
 # ---------------- 日内调整 LP（含 5 倍紧急购电的场景对冲） ----------------
@@ -422,6 +447,8 @@ def solve_stage_v2(d, s_idx, s_hour, soc_start, soc_end, ghat_rem, price_rem, F_
 # 这里是标准的滚动时域优化（MPC）：每个 Δt 用"当日已实现的实测值 + 当前可用档位的预报"
 # 重解一个小 LP，只执行当前槽的动作，下一槽再解一次（因此是因果的，不使用任何未来数据）。
 EXEC_NAIVE = bool(os.environ.get("EXEC_NAIVE"))   # 消融：回到"照抄计划 + 限幅"的朴素执行
+# EXEC_SMART：朴素执行 +「吃尽一切实际富余充电」。见 execute_naive 内的说明。
+EXEC_SMART = int(os.environ.get("EXEC_SMART", 0))
 MPC_H = int(os.environ.get("MPC_H", 36))          # 预测时域（槽）；36 槽 = 6 h
 MPC_K = int(os.environ.get("MPC_K", 1))           # 执行层的残差场景数（见下：默认 1 = 点预报）
 MPC_LAM = float(os.environ.get("MPC_LAM", 5.0))   # 末端 SOC 松弛罚（元/kWh，近硬约束）
@@ -572,10 +599,32 @@ def execute_naive(day, g_day, c_day, d_day, a, b, soc):
         if d_day[t] > d_max:
             kd += d_day[t] - d_max
             d_day[t] = d_max
+        if EXEC_SMART >= 3:
+            # 变体 3：放电严格只放到【刚好盖住缺口】，不再照抄 d̂。
+            # 为什么应当占优：g 已在 0:00 承诺死，放多放少都不改变 p·g；e = max(0, L−P−g−d)
+            # 只要 d = need 就归零。故 d̂ > need 的那部分放电【零收益】，只会把电放掉、
+            # 再靠富余充回来，白丢一个来回的 η²（储能往返效率 0.81）。
+            # 反过来说，不把那部分电放掉，它就留在电池里等更贵的缺口 —— 这正是 (C) 完美
+            # 预见下界比我们便宜 32.4 万的原因（它买的紧急电量更多、但都买在便宜时段）。
+            need = max(0.0, load[day, t] - pv[day, t] - g_day[t])
+            d_day[t] = min(need, d_max)
         c_max = max(0.0, (SOC_MAX - soc) / (ETA * DT))        # 充电受 SOC 上限约束
         surp = pv[day, t] + g_day[t] + d_day[t] - load[day, t]
         c_lim = min(max(0.0, surp), c_max)
-        if c_day[t] > c_lim:
+        if EXEC_SMART:
+            # 执行层应当【吃尽一切实际富余】，而不是只充计划里的 ĉ。
+            # 理由：富余不能上网卖（题面），不充就是白白弃掉，边际成本 = 0；而任何一次
+            # 放电削减最后都变成 5p 的紧急购电（5p 最高 6.98 元/kWh，是套利价差 ~0.98 的 7 倍）。
+            # 计划 ĉ 是"预测富余"下的建议值，实际富余更大时多充的部分零成本，且直接减少
+            # 后续 SOC 触底造成的放电削减（实测同一 ĝ 下削减 118,510 kWh）。
+            # ⚠ 这条只能在【执行层】用：计划层的 ĉ 若也这么定，会让 LP 认为"想充多少都充得上"，
+            #   从而排出日后放不出来的放电计划（这正是 solve_annual_sp 注释里记录的那个坑）。
+            c_day[t] = c_lim
+            if EXEC_SMART == 2 and d_day[t] < max(0.0, load[day, t] - pv[day, t] - g_day[t]):
+                # 变体 2：缺口时用电池顶（d = max(d̂, need)），对照。
+                d_day[t] = min(max(0.0, load[day, t] - pv[day, t] - g_day[t]), d_max)
+                c_day[t] = min(max(0.0, pv[day, t] + g_day[t] + d_day[t] - load[day, t]), c_max)
+        elif c_day[t] > c_lim:
             kc += c_day[t] - c_lim
             c_day[t] = c_lim
         soc += (ETA * c_day[t] - d_day[t] / ETA) * DT
@@ -630,7 +679,7 @@ for d in range(NDAYS):
                   f"adv_d={adv_d[t]:>7.0f} 计划d̂={d_hat[d * N + t]:>7.0f} | "
                   f"soc={soc:>6.0f} 实际富余={Pd[t] + g_day[t] - Ld[t]:>7.0f}")
         # ---- 只执行当前槽，并按"实际富余 / 实际 SOC"双向限幅 ----
-        if EXEC_NAIVE:
+        if EXEC_NAIVE or EXEC_SMART:
             soc, kc_, kd_ = execute_naive(d, g_day, adv_c, adv_d, t, t + 1, soc)
             curt_c += kc_; curt_d += kd_
             c_fin[d * N + t] = adv_c[t]; d_fin[d * N + t] = adv_d[t]
@@ -711,11 +760,20 @@ print(f"  超额费   1.5p·(g−ĝ)+       {excess:>16,.0f} 元")
 print(f"  紧急购电费 5p·e            {em_fee:>16,.0f} 元   ({em_kwh:,.0f} kWh)")
 print(f"  ------------------------------------------------")
 print(f"  合计                       {total:>16,.0f} 元")
-print(f"  对照：问题 2（随机规划）     13,832,465 元 → 问题 3 省 "
-      f"{13832465 - total:,.0f} 元 ({(13832465 - total) / 13832465 * 100:.2f}%)")
-print(f"  对照：旧 result3（myopic）  15,681,438 元 → 本版再省 "
-      f"{15681438 - total:,.0f} 元")
-print(f"  对照：完美预见下界          12,229,461 元")
+# 对照基准：每一条都必须写明【口径 + 来源】，避免再出现"拿一个不可实现的数当基准"。
+# ⚠ 这里曾硬编码 13,832,465 元作为问题 2 的基准。该数低于同一 ĝ 下的完美预见储能下界
+#   （15,347,211 元），故不存在能实现它的因果执行策略 —— 它是个假数，已删除。
+#   问题 2 的正确定义就是"本脚本 NO_ADJ=1 + 同一执行层"，故基准改为实测值。
+#   同 ĝ 不调整的实测：18,300,549（朴素执行） / 17,149,812（MPC 执行，本版采用）。
+P2_REF = float(os.environ.get("P2_REF", 17_149_812))
+_v = P2_REF - total
+print(f"  对照：问题 2（本脚本 NO_ADJ=1 + MPC 执行）{P2_REF:>13,.0f} 元 → 问题 3 "
+      f"{'省' if _v >= 0 else '多花'} {abs(_v):,.0f} 元 ({_v / P2_REF * 100:+.2f}%)"
+      f"    ← 这才是 6/12/18 调整通道的价值")
+print(f"  对照：旧 result3（旧 e 口径 + myopic，非本模型）15,681,438 元")
+print(f"  对照：完美预见全年 LP（ĝ 可自由选，松下界）     12,229,461 元")
+print(f"  对照：ĝ 固定、储能完美预见（不可实现的紧下界）14,613,824 元"
+      f"　见 文档/问题2_独立复核_可交付性与追索模型.md")
 tod = np.tile(np.arange(N), NDAYS)
 print("  按 6h 时窗拆分：")
 print(f"    {'时窗':>8} {'计划(kWh)':>13} {'净调整(kWh)':>13} {'上调':>11} {'下调':>11} "
@@ -739,9 +797,15 @@ print(f"  净调整量 {((g_fin - g_hat) * DT)[win].sum():,.0f} kWh；"
       f"计划量 {g_hat[win].sum() * DT:,.0f} kWh；实际购电 {(g_fin * DT)[win].sum():,.0f} kWh")
 
 if os.environ.get("NO_SAVE"):        # 扫描时用：只出数字，不写文件
-    if os.environ.get("DUMP_NPZ"):   # 诊断：导出计划，供 verify_p2.py 独立核验
-        np.savez(os.environ["DUMP_NPZ"], g=g_hat, c=c_hat, d=d_hat, soc=soc_hat)
-        print(f"  [dump] g/c/d/soc 已写入 {os.environ['DUMP_NPZ']}")
+    if os.environ.get("DUMP_NPZ"):   # 诊断：导出计划与执行轨迹
+        # 除计划 (g,c,d,soc) 外，一并导出【实际执行轨迹】与【逐槽紧急购电】：
+        #   · 诊断脚本用 g/c/d/soc 做独立核验；
+        #   · diag_hedge_fixpoint.py 用 e_fin 逐时段统计"缺口发生频率"，做报童不动点迭代。
+        _e_fin = np.maximum(0.0, load.ravel() - g_fin - pv.ravel() - d_fin)
+        np.savez(os.environ["DUMP_NPZ"], g=g_hat, c=c_hat, d=d_hat, soc=soc_hat,
+                 g_fin=g_fin, c_fin=c_fin, d_fin=d_fin, e_fin=_e_fin)
+        print(f"  [dump] 计划(g,c,d,soc) 与执行(g_fin,c_fin,d_fin,e_fin) "
+              f"已写入 {os.environ['DUMP_NPZ']}")
     sys.exit(0)
 
 # ---------------- 写 result3.xlsx ----------------

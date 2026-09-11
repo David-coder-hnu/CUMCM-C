@@ -27,6 +27,13 @@ import numpy as np
 import openpyxl
 import pandas as pd
 
+# Windows 下 stdout 重定向到文件/管道时默认走 GBK，打印 ĝ(U+011D) 等字符会抛
+# UnicodeEncodeError 并打断脚本（前面的求解其实已算完）。统一改 UTF-8。
+import sys as _sys
+for _s in (_sys.stdout, _sys.stderr):
+    if hasattr(_s, "reconfigure"):
+        _s.reconfigure(encoding="utf-8", errors="replace")
+
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SLOTS = ["10:00-10:10", "12:00-12:10", "14:00-14:10",
          "16:00-16:10", "18:00-18:10", "20:00-20:10"]
