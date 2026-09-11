@@ -379,10 +379,32 @@ def pv_fc(d, s):
 
 P_hat = np.stack([[pv_fc(d, s) for s in range(4)] for d in range(NDAYS)])    # (365,4,144)
 
-K_PEERS = 4
+K_PEERS = 4                             # 同星期几情景数（L_base 已改用分组，此处仅留作对照）
+GRP_SPAN = int(os.environ.get("P4_GSPAN", 7))      # 分组回看窗口（天）
+GRP_TRAIN = int(os.environ.get("P4_GTRAIN", REPORT))
+
+
+def low_demand_dows(train_days):
+    """从 train_days 推断「低需求日」：日均净负荷最低的两个星期几。只喂暖机期，无前视。"""
+    nl = (load - pv).sum(axis=1)
+    dow = np.array([d % 7 for d in range(NDAYS)])
+    means = [nl[train_days][dow[train_days] == k].mean() for k in range(7)]
+    order = np.argsort(means)
+    return (int(order[0]), int(order[1]))
+
+
+# ⚠ L_base 口径 = problem3_v3.py 定稿（低需求日分组 {Fri,Sat}，回看 7 天），
+#   不是本文件早先的「同星期几 K=4」。换口径的理由与实测见 文档/问题4_求解归档.md：
+#   换基线前 problem4_3 与 result3.xlsx 逐元素相同，换基线后必须同步移植才能保住
+#   那条交叉验证。span=7 取 P3 定稿值 —— P3 实测 span6 比 span7 贵 32,095（14,317,826
+#   vs 14,285,731），因为低需求日只剩 1 个样本、情景均线形状失真，故 P3 不能用 6。
+#   本文件的残差那一路不受影响：net_hist 是逐日累积的全历史池，已等价于 P3_HSRC="all"。
+GRP_DOWS = low_demand_dows(np.arange(0, GRP_TRAIN))
+_gm = np.array([(d % 7) in GRP_DOWS for d in range(NDAYS)])
+
 L_base = np.zeros_like(load)
 for d in range(NDAYS):
-    idx = [d - 7 * k for k in range(1, K_PEERS + 1) if d - 7 * k >= 0]
+    idx = [t for t in range(max(0, d - GRP_SPAN), d) if _gm[t] == _gm[d]]
     L_base[d] = load[idx].mean(axis=0) if idx else load.mean(axis=0)
 
 F_hat = L_base[:, None, :] - P_hat      # (365,4,144)

@@ -51,7 +51,7 @@
     联络线容量**。缺省 G_MAX = 5000 kW 是自加的保守假设（与储能同量级），
     旋钮 P4_GMAX；按字面读法放开：P4_GMAX=inf。
     问题 2 的交付方案没有这个上界，实测峰值 10,325.3 kW、
-    7,801/48,096 个槽越限、334 天无一幸免。
+    7,313/48,096 个槽越限、334 天无一幸免（分组 span6 口径，见问题 2 归档 §9）。
 
 六、交付表的购电量里有 **16.39%** 既未供负载、也未进电池（必须声明）
     实测（口径同 diag_p4_audit.py）：年购电 22,444,159 kWh，而净需求 (L−P)Δt 仅
@@ -135,7 +135,29 @@ pr_plan = price_real if READING == "A" else price_base
 win = np.zeros(T, bool); win[REPORT * N:] = True
 L = load.ravel(); P = pv.ravel()
 
-peers = [[d - 7 * k for k in range(1, K_PEERS + 1) if d - 7 * k >= 0] for d in range(NDAYS)]
+# 情景集口径 = problem2.py 定稿（低需求日分组 {Fri,Sat}，回看 6 天），
+# 不是本文件早先的「同星期几 K=4」。理由见 文档/问题4_求解归档.md。
+# ⚠ span=6 不是随手取的：它恰好是**不触发 sc_idx 退化分支的最短窗口**。
+#   低需求日每周只有 2 天，回看 s 天只能捞到 ≈2s/7 个同组日；s=6 时周五/周六各捞到
+#   1 个，s≤5 时窗口（周日…周四）里一个同组日都没有 ⟹ 退化成 [d] 自身、用当天实际
+#   负荷冒充情景天，计费窗口内会有 47 天前视作弊。已核验：span=6 在计费窗口内
+#   退化天数为 0。P2 实测在 s≥6 上总费单调递增，故可行最优即 6。
+GRP_SPAN = int(os.environ.get("P42_GSPAN", 6))
+GRP_TRAIN = int(os.environ.get("P42_GTRAIN", REPORT))
+
+
+def low_demand_dows(train_days):
+    """从 train_days 推断「低需求日」：日均净负荷最低的两个星期几。只喂暖机期，无前视。"""
+    nl = (load - pv).sum(axis=1)
+    dow = np.array([d % 7 for d in range(NDAYS)])
+    means = [nl[train_days][dow[train_days] == k].mean() for k in range(7)]
+    order = np.argsort(means)
+    return (int(order[0]), int(order[1]))
+
+
+GRP_DOWS = low_demand_dows(np.arange(0, GRP_TRAIN))
+_gm = np.array([(d % 7) in GRP_DOWS for d in range(NDAYS)])
+peers = [[t for t in range(max(0, d - GRP_SPAN), d) if _gm[t] == _gm[d]] for d in range(NDAYS)]
 base_e = np.zeros(NDAYS, dtype=np.int64)
 _c = 0
 for d in range(NDAYS):
@@ -145,10 +167,11 @@ E_total = _c
 
 
 def sc_idx(d):
-    """day d 的情景天列表；前 K 周无同星期几历史时退化为 [d] 本身（单情景）。
+    """day d 的情景天列表；无同组历史时退化为 [d] 本身（单情景）。
 
-    注意退化分支 sc_idx(dd)=[dd] 会让该日的紧急系数用到当日实际价（轻微前视），
-    但它只出现在计费窗口之外的热身期（d < REPORT=31），不影响 334 天结算。
+    注意退化分支 sc_idx(dd)=[dd] 会让该日的紧急系数用到当日实际价（轻微前视）。
+    分组 span=6 下已核验：计费窗口（d ≥ REPORT=31）内退化天数为 **0**，
+    退化只出现在热身期 d < 6，不影响 334 天结算。换更短的 span 会打破这个性质。
     """
     return peers[d] if peers[d] else [d]
 
