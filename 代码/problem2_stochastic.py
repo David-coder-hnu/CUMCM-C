@@ -11,9 +11,20 @@
   直接最小化【期望】总费用。即两阶段随机规划：
 
     第一阶段(here-and-now，一天只取一份，不依赖具体场景)：
-        计划购电 ĝ、充电 ĉ、放电 d̂、储能 SOC 递推；
+        计划购电 ĝ、放电 d̂、储能 SOC 递推；
     第二阶段(recourse，每个场景 ω 各一份)：
-        实际负荷/光伏偏离，缺口由 5 倍价紧急购电 e_{t,ω} 补足。
+        实际负荷/光伏偏离，充电量 c̄_{t,ω} 与实际可用富余挂钩（缺电场景下被削减），
+        负载缺口由 5 倍价紧急购电 e_{t,ω} 补足。
+
+    紧急购电口径（严格按题面）：
+        题面只说"微网提供的电能不可低于小区负载，如果低于负载，需向外网紧急购电"，
+        触发条件是【负载缺口】，不含充电。缺电时运营商的合理动作是【先保负载、削减充电】，
+        而不是为保住充电计划去花 5 倍价买电。因此
+            e_{t,ω} = max(0, L_ω − ĝ − P_ω − d̂)
+        且充电只能用富余能量：
+            c̄_{t,ω} ≤ max(0, P_ω + ĝ + d̂ − L_ω)
+        ⚠ 两者必须成对出现：若只改 e 而仍让充电"凭空进行"（不占能源），LP 会发现
+        "免费充电"漏洞——实测费用会跌破完美预见下界（12,229,461 元），模型崩坏。
 
     场景集 Ω_d = 与当天"同星期几"的历史天（与'同星期几'预测用同一套信息，绝不用未来天）。
 
@@ -90,8 +101,15 @@ def solve_full_year(b_eq_net):
 
 
 def rollout_cost(g, c, d):
-    """把计划 (g,ĉ,d̂) 作用在实际 2025 轨迹上：紧急购电 e=max(0, L+ĉ−ĝ−P−d̂)，算报告窗口总费。"""
-    e = np.maximum(0.0, load.ravel() + c - g - pv.ravel() - d)
+    """把计划 (ĝ,d̂) 作用在实际 2025 轨迹上，按题面口径结算报告窗口总费。
+
+    题面口径：紧急购电只补【负载缺口】，缺电时削减充电而不是花 5 倍价保住充电：
+        e    = max(0, L − ĝ − P − d̂)
+        c̄    = min(ĉ, max(0, P + ĝ + d̂ − L))     # 实际能充进去的量
+    参数 c 仅用于统计被削减的充电量（诊断用），不进入费用。
+    """
+    surplus = pv.ravel() + g + d - load.ravel()
+    e = np.maximum(0.0, -surplus)
     planned = (price * g * DT)[win].sum()
     emerg = (5 * price * e * DT)[win].sum()
     return planned + emerg, (e * DT)[win].sum()
@@ -115,11 +133,12 @@ cost_pt, em_pt = rollout_cost(g_pt, c_pt, d_pt)
 
 # ================= 3) 两阶段随机规划（无预报最优） =================
 t0 = time.time()
-G0, C0, D0, S_idx = 0, T, 2 * T, 3 * T
-E0 = 4 * T + 1                          # SOC 占 [3T, 4T]，共 T+1 个；紧急购电从 4T+1 起
+G0, D0, S_idx = 0, T, 2 * T             # 一阶段：计划购电 ĝ、计划放电 d̂、SOC
 E_total = sum(len(ps) * N for ps in peers)
+CB0 = 3 * T + 1                          # SOC 占 [2T, 3T]，共 T+1 个；其后：场景充电 c̄
+E0 = CB0 + E_total                       # 再其后：场景紧急购电 e
 n_vars = E0 + E_total
-print(f"[随机规划] 场景总数 {E_total:,}，变量 {n_vars:,}，约束 {T + E_total:,}")
+print(f"[随机规划] 场景总数 {E_total:,}，变量 {n_vars:,}，约束 {T + 2 * E_total:,}")
 
 base_e = np.zeros(NDAYS, dtype=np.int64)
 cnt = 0
@@ -139,44 +158,74 @@ for d in range(NDAYS):
         sl = slice(base_e[d] + w * N, base_e[d] + (w + 1) * N)
         c_obj[E0 + sl.start:E0 + sl.stop] = 5.0 * price_day / Kd
 
-# --- 等式：SOC 递推（T 行，每行 4 个非零） ---
+# --- 等式：SOC 递推（T 行）。充电按【场景平均】E[c̄] 计入：
+#     S_{t+1} − S_t − ETA·Δt·(1/K_d)·Σ_ω c̄_{t,ω} + (Δt/ETA)·d̂_t = 0 ---
 t = np.arange(T)
-eq_rows = np.tile(t, 4)
-eq_cols = np.concatenate([S_idx + t + 1, S_idx + t, C0 + t, D0 + t])
-eq_data = np.concatenate([np.ones(T), -np.ones(T), -ETA * DT * np.ones(T), (DT / ETA) * np.ones(T)])
-A_eq = sparse.coo_matrix((eq_data, (eq_rows, eq_cols)), shape=(T, n_vars)).tocsr()
+eq_rows = [t, t, t]
+eq_cols = [S_idx + t + 1, S_idx + t, D0 + t]
+eq_data = [np.ones(T), -np.ones(T), (DT / ETA) * np.ones(T)]
+for d in range(NDAYS):
+    Kd = len(peers[d])
+    if Kd == 0:
+        continue
+    td = d * N + np.arange(N)
+    for w in range(Kd):
+        sl = slice(base_e[d] + w * N, base_e[d] + (w + 1) * N)
+        eq_rows.append(td)
+        eq_cols.append(CB0 + np.arange(sl.start, sl.stop))
+        eq_data.append(-ETA * DT / Kd * np.ones(N))
+A_eq = sparse.coo_matrix((np.concatenate(eq_data),
+                          (np.concatenate(eq_rows), np.concatenate(eq_cols))),
+                         shape=(T, n_vars)).tocsr()
 b_eq = np.zeros(T)
 
-# --- 不等式：每个场景紧急购电 e_{t,ω} ≥ L+ĉ−ĝ−P−d̂，即 −g −d +c −e ≤ P−L（E_total 行） ---
-nz = 4 * E_total
+# --- 不等式（2·E_total 行） ---
+#  (i)  充电只能用富余：  c̄_{t,ω} ≤ P_ω + ĝ + d̂ − L_ω  ⇔  c̄ − ĝ − d̂ ≤ P − L
+#  (ii) 紧急只补负载缺口：e_{t,ω} ≥ L_ω − ĝ − P_ω − d̂     ⇔  −ĝ − d̂ − e ≤ P − L
+nz = 6 * E_total
 ub_row = np.empty(nz, dtype=np.int64)
 ub_col = np.empty(nz, dtype=np.int64)
 ub_dat = np.empty(nz, dtype=np.float64)
-ub_b = np.empty(E_total, dtype=np.float64)
+ub_b = np.empty(2 * E_total, dtype=np.float64)
 p = 0
 for d in range(NDAYS):
-    Kd = len(peers[d])
     for w, pd_ in enumerate(peers[d]):
         sl = slice(base_e[d] + w * N, base_e[d] + (w + 1) * N)
         r = np.arange(sl.start, sl.stop)
+        r1, r2 = r, E_total + r
         t = d * N + np.arange(N)
-        ub_row[p:p + N] = r; ub_col[p:p + N] = G0 + t; ub_dat[p:p + N] = -1.0; p += N
-        ub_row[p:p + N] = r; ub_col[p:p + N] = D0 + t; ub_dat[p:p + N] = -1.0; p += N
-        ub_row[p:p + N] = r; ub_col[p:p + N] = C0 + t; ub_dat[p:p + N] = +1.0; p += N
-        ub_row[p:p + N] = r; ub_col[p:p + N] = E0 + r;  ub_dat[p:p + N] = -1.0; p += N
-        ub_b[sl] = pv[pd_] - load[pd_]
-A_ub = sparse.coo_matrix((ub_dat, (ub_row, ub_col)), shape=(E_total, n_vars)).tocsr()
+        # (i) c̄ − ĝ − d̂ ≤ P_ω − L_ω
+        ub_row[p:p + N] = r1; ub_col[p:p + N] = CB0 + r; ub_dat[p:p + N] = +1.0; p += N
+        ub_row[p:p + N] = r1; ub_col[p:p + N] = G0 + t;  ub_dat[p:p + N] = -1.0; p += N
+        ub_row[p:p + N] = r1; ub_col[p:p + N] = D0 + t;  ub_dat[p:p + N] = -1.0; p += N
+        ub_b[r1] = pv[pd_] - load[pd_]
+        # (ii) −ĝ − d̂ − e ≤ P_ω − L_ω
+        ub_row[p:p + N] = r2; ub_col[p:p + N] = G0 + t;  ub_dat[p:p + N] = -1.0; p += N
+        ub_row[p:p + N] = r2; ub_col[p:p + N] = D0 + t;  ub_dat[p:p + N] = -1.0; p += N
+        ub_row[p:p + N] = r2; ub_col[p:p + N] = E0 + r;  ub_dat[p:p + N] = -1.0; p += N
+        ub_b[r2] = pv[pd_] - load[pd_]
+A_ub = sparse.coo_matrix((ub_dat, (ub_row, ub_col)), shape=(2 * E_total, n_vars)).tocsr()
 
-bounds = ([(0, None)] * T + [(0, P_MAX)] * T + [(0, P_MAX)] * T          # g, c, d
+bounds = ([(0, None)] * T + [(0, P_MAX)] * T                            # g, d
           + [(SOC0, SOC0)] + [(SOC_MIN, SOC_MAX)] * (T - 1) + [(SOC0, SOC0)]  # SOC
-          + [(0, None)] * E_total)                                         # e
+          + [(0, P_MAX)] * E_total                                         # c̄ 场景充电
+          + [(0, None)] * E_total)                                         # e 场景紧急购电
 res = linprog(c_obj, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=ub_b, bounds=bounds, method="highs")
 assert res.success, res.message
 x = res.x
 g_sp = x[G0:G0 + T]
-c_sp = x[C0:C0 + T]
 d_sp = x[D0:D0 + T]
 soc_sp = x[S_idx:S_idx + T + 1]
+# 充电量 = 各场景充电的期望 E[c̄]（缺电场景已被削减，故 ≤ 名义计划）
+c_sp = np.zeros(T)
+for d in range(NDAYS):
+    Kd = len(peers[d])
+    if Kd == 0:
+        continue
+    sl = d * N + np.arange(N)
+    for w in range(Kd):
+        st = CB0 + base_e[d] + w * N
+        c_sp[sl] += x[st:st + N] / Kd
 cost_sp_expected = DT * res.fun                # 期望总费用（对经验分布）
 cost_sp_realized, em_sp = rollout_cost(g_sp, c_sp, d_sp)   # 实际 2025 轨迹费用
 
@@ -203,7 +252,7 @@ print("-" * 88)
 
 def row(name, g, c, d):
     planned_fee = (price * g * DT)[win].sum()
-    e = np.maximum(0.0, load.ravel() + c - g - pv.ravel() - d)
+    e = np.maximum(0.0, load.ravel() - g - pv.ravel() - d)   # 题面口径：只补负载缺口
     emerg_fee = (5 * price * e * DT)[win].sum()
     em = (e * DT)[win].sum()
     print(f"{name:<24}{planned_fee:>14,.0f}{emerg_fee:>14,.0f}{em:>18,.0f}{planned_fee + emerg_fee:>16,.0f}")
@@ -221,8 +270,15 @@ print(f"点预测(当前方案) = {cost_pt:,.0f} 元")
 print(f"随机规划(实际轨迹) = {cost_sp_realized:,.0f} 元  → 相对点预测节省 {cost_pt - cost_sp_realized:,.0f} 元 ({(cost_pt - cost_sp_realized) / cost_pt * 100:.2f}%)")
 print(f"\nSOC 范围(随机规划): [{soc_sp.min():.1f}, {soc_sp.max():.1f}] kWh，SOC_0={soc_sp[0]:.1f}，SOC_T={soc_sp[-1]:.1f}")
 
+if os.environ.get("DUMP_NPZ"):          # 诊断：导出问题 2 自己的计划，供独立核验脚本使用
+    np.savez(os.environ["DUMP_NPZ"], g=g_sp, c=c_sp, d=d_sp, soc=soc_sp)
+    print(f"  [dump] g/c/d/soc 已写入 {os.environ['DUMP_NPZ']}")
+
+
 # ================= 写 result2.xlsx（用随机规划最优计划替代点预测计划） =================
-e_sp = np.maximum(0.0, load.ravel() + c_sp - g_sp - pv.ravel() - d_sp)
+e_sp = np.maximum(0.0, load.ravel() - g_sp - pv.ravel() - d_sp)
+print(f"  [诊断] 报告窗口 期望充电量 {c_sp[win].sum() * DT:,.0f} kWh"
+      f"（受各场景可用富余约束，缺电场景不充电）")
 g_day = (g_sp * DT).reshape(NDAYS, N)
 c_day = (c_sp * DT).reshape(NDAYS, N)
 d_day = (d_sp * DT).reshape(NDAYS, N)

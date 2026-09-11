@@ -95,7 +95,8 @@ _dual = (float(np.dot(b_eq, res.eqlin.marginals))
 _duality_gap = res.fun - _dual          # 原目标 − 对偶目标，应 ≈ 0
 
 # ---------------- 紧急购电（实际 vs 计划） ----------------
-e = np.maximum(0.0, load.ravel() + c - g - pv.ravel() - d)     # 紧急购电功率 kW
+# 题面口径：e 只补"微网提供的电能(购电+光伏+放电)低于小区负载"的缺口，不含充电量
+e = np.maximum(0.0, load.ravel() - g - pv.ravel() - d)          # 紧急购电功率 kW
 
 # ---------------- 能量（kWh） ----------------
 purchase = g * DT

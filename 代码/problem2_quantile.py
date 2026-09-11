@@ -71,7 +71,8 @@ def solve_and_cost(N_hat):
     assert res.success, res.message
     x = res.x
     g = x[G0:G0 + T]; c = x[C0:C0 + T]; d = x[D0:D0 + T]
-    e = np.maximum(0.0, load.ravel() + c - g - pv.ravel() - d)
+    # 题面口径：e 只补"微网提供的电能(购电+光伏+放电)低于小区负载"的缺口，不含充电量
+    e = np.maximum(0.0, load.ravel() - g - pv.ravel() - d)
     planned = (price * g * DT)[win].sum()
     emerg = (5 * price * e * DT)[win].sum()
     em_kwh = (e * DT)[win].sum()

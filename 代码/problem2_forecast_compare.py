@@ -129,7 +129,8 @@ print("-" * 100)
 results = []
 for name, (L_hat, P_hat) in methods:
     g, c, d = solve_full_year(L_hat, P_hat)
-    e = np.maximum(0.0, load.ravel() + c - g - pv.ravel() - d)
+    # 题面口径：e 只补"微网提供的电能(购电+光伏+放电)低于小区负载"的缺口，不含充电量
+    e = np.maximum(0.0, load.ravel() - g - pv.ravel() - d)
     planned = (g * DT)[win].sum(); emerg = (e * DT)[win].sum()
     cost_planned = (price * g * DT)[win].sum(); cost_emerg = (5 * price * e * DT)[win].sum()
     total = cost_planned + cost_emerg
