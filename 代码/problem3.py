@@ -1,19 +1,34 @@
 # -*- coding: utf-8 -*-
 """
-问题 3：0:00 计划 + 6:00/12:00/18:00 调整 + 双向调整费 + 紧急购电(5 倍价)。
+问题 3（**旧版 / legacy**）：0:00 计划 + 6:00/12:00/18:00 调整 + 双向调整费 + 紧急购电(5 倍价)。
+
+⚠⚠ **本文件不是问题 3 的定稿，不要用它出数。** ⚠⚠
+  * 定稿求解器是 `代码/problem3_v3.py`（口径 A），交付 `结果/result3.xlsx`。
+  * 本文件的**计划层是在口径 B 下优化的**（`Q_FARSIGHT=0.75` 取自 B 的对称临界分位
+    `1.5/(1.5+0.5)`），只有**结算与写盘已对齐口径 A**。所以它报出的数**不是**定稿的数，
+    只是一个历史基线，用于对照归档。
+  * **写盘路径已改为 `代码/诊断/_p3_legacy.xlsx`**（可用 `P3_LEGACY_OUT` 覆盖）。
+    此前它直接写 `结果/result3.xlsx`，跑一次就会用口径 B 的数**静默覆盖 v3 的交付物**。
+
+计费口径（口径 A，与 problem3_v3.py 一致）：
+    总费 = 计划购电费用 + 紧急购电费用 + 调整购电量的相关费用
+         = Σ p·ĝ·Δt + 0.5·Σ p·(ĝ−g)⁺·Δt + 1.5·Σ p·(g−ĝ)⁺·Δt + 5·Σ p·e·Δt
+  即计划量**全额付费**（题面：其他时间段的购电费用均按计划购电量计算）；
+  下调按 0.5p（违约）、上调按 1.5p（超额）。
+  （此前本文件报的是 `p·g + 0.5p·|Δ|`，与口径 A 的代数和差 `Σp·(ĝ−g)⁺`，已修正。）
 
 约定（与团队确认）：
   * 0:00 用附件3 的 0:00 光伏预报(逐小时→线性插值到 10min) + 负荷"同星期几4周" 制定计划。
   * 6/12/18 点用"更新预报 + 已发生实际负荷的比值修正"重排剩余时段（电池自由充放电，SOC 不越界）。
-  * 调整购电量 = 最终购电 − 0:00 计划（带符号净差）；下调 50%、上调 150%（等价 0.5·price·|g−ĝ|）。
+  * 调整购电量 = 最终购电 − 0:00 计划（带符号净差）。
   * 紧急购电 = 最终策略 vs 实际负荷/光伏 的缺口，5 倍价。
   * 储能沿用"全年能量中性"：SOC_0=SOC_T=6000，日内调整以 0:00 计划的 24:00 SOC 为锚。
 
 两档初设（MODE）：
   * myopic    ：0:00 计划用均值点预测（不预知未来可调整）。
-  * farsighted：0:00 计划用报童最优分位预测（前瞻不对称调整费，约 75 分位）。
+  * farsighted：0:00 计划用报童最优分位预测（前瞻不对称调整费）。
 
-输出：结果/result3.xlsx（计划购电量/调整购电量/充放电量/紧急购电量 4 表）。
+输出：代码/诊断/_p3_legacy.xlsx（计划购电量/调整购电量/充放电量/紧急购电量 4 表）。
 """
 import os
 import datetime as dt
@@ -31,7 +46,10 @@ for _s in (_sys.stdout, _sys.stderr):
         _s.reconfigure(encoding="utf-8", errors="replace")
 
 MODE = os.environ.get("P3_MODE", "myopic")   # "myopic" | "farsighted"
-Q_FARSIGHT = 0.75          # 前瞻分位（报童临界分位 1.5/(1.5+0.5)）
+Q_FARSIGHT = 0.75          # 前瞻分位（**口径 B** 的对称临界分位 1.5/(1.5+0.5)）
+# ⚠ 这是 B 的分位，不是 A 的。口径 A 下 0:00–6:00 块不可调整、只能吃 5p 紧急，
+#   其临界比是 4p/(4p+p)=0.80（见 problem3_v3.py 的 TAU_B）。本文件**不改**这个值，
+#   因为改了就变成另一个模型；它只作为口径 B 的历史基线保留。
 
 DT = 1.0 / 6.0
 ETA = 0.9
@@ -309,12 +327,31 @@ for d in range(NDAYS):
 e = np.maximum(0.0, load - g_final - pv - d_final)                # (365,144) kW
 plan_kwh = g_plan * DT
 adj_kwh = (g_final - g_plan) * DT
-final_kwh = g_final * DT
 em_kwh = e * DT
 
 win = np.zeros(NDAYS, dtype=bool); win[REPORT:] = True
-plan_fee = (price_day * final_kwh)[win].sum()
-adj_fee = (0.5 * price_day * np.abs(adj_kwh))[win].sum()
+
+
+def day_fee_A(di):
+    """口径 A 的单日总费（与 problem3_v3.py 的 write_result3.day_fee 同式）。
+
+        总费 = Σ p·ĝ·Δt  +  0.5·Σ p·(ĝ−g)⁺·Δt  +  1.5·Σ p·(g−ĝ)⁺·Δt  +  5·Σ p·e·Δt
+
+    adj_kwh = (g − ĝ)·Δt（带符号净差），故 (ĝ−g)⁺ = max(−adj, 0)、(g−ĝ)⁺ = max(adj, 0)。
+    ⚠ 两项的**系数不同**（0.5 对下调、1.5 对上调），不能合并成 `0.5·|Δ|`——
+      那个对称写法与口径 A 相差 `Σp·(ĝ−g)⁺`。
+    """
+    a = adj_kwh[di]
+    return float((price_day * plan_kwh[di]).sum()
+                 + (0.5 * price_day * np.maximum(-a, 0.0)).sum()
+                 + (1.5 * price_day * np.maximum(a, 0.0)).sum()
+                 + (5.0 * price_day * em_kwh[di]).sum())
+
+
+# 口径 A 分项（计费窗口）
+plan_fee = (price_day * plan_kwh)[win].sum()
+breach_fee = (0.5 * price_day * np.maximum(-adj_kwh, 0.0))[win].sum()
+excess_fee = (1.5 * price_day * np.maximum(adj_kwh, 0.0))[win].sum()
 em_fee = (5 * price_day * em_kwh)[win].sum()
 
 
@@ -339,10 +376,11 @@ print(f"调整阶段求解次数      : {stage_n} (应={NDAYS * 3})")
 print(f"调整后 SOC 范围       : [{soc_fin.min():.1f}, {soc_fin.max():.1f}] kWh (应∈[1200,10800])")
 print(f"每日 24:00 SOC 锚偏差 : {np.abs(soc_fin[:, N] - soc_mid[1:]).max():.2f} kWh (应≈0)")
 print("-" * 72)
-print(f"计划购电费            : {plan_fee:,.0f} 元")
-print(f"调整购电费            : {adj_fee:,.0f} 元")
-print(f"紧急购电费            : {em_fee:,.0f} 元")
-print(f"总购电费              : {plan_fee + adj_fee + em_fee:,.0f} 元")
+print(f"计划购电费 Σp·ĝ       : {plan_fee:,.0f} 元")
+print(f"　违约费 0.5p(ĝ−g)⁺   : {breach_fee:,.0f} 元")
+print(f"　超额费 1.5p(g−ĝ)⁺   : {excess_fee:,.0f} 元")
+print(f"紧急购电费 5p·e       : {em_fee:,.0f} 元")
+print(f"总购电费（口径 A）    : {plan_fee + breach_fee + excess_fee + em_fee:,.0f} 元")
 print(f"计划购电量(计划侧)    : {plan_kwh[win].sum():,.0f} kWh")
 print(f"调整购电量(净带符号)  : {adj_kwh[win].sum():,.0f} kWh")
 print(f"紧急购电量            : {em_kwh[win].sum():,.0f} kWh")
@@ -369,7 +407,12 @@ def emergency_segments(e_kwh):
 
 
 template = os.path.join(BASE, "附件", "附件5", "result3.xlsx")
-out_path = os.path.join(BASE, "结果", "result3.xlsx")
+# ⚠ 故意**不写** 结果/result3.xlsx —— 那是 problem3_v3.py（口径 A 定稿）的交付物，
+#   旧版这里是同一个路径，跑一次就会静默覆盖定稿。
+#   也不写进 结果/ 目录：那里是交卷时整包提交的，混进一个"旧版非交付物"有被误交的风险。
+#   落到 代码/诊断/_* （既有的「下划线前缀 = 可重跑中间产物」约定，已被 .gitignore 覆盖）。
+out_path = (os.environ.get("P3_LEGACY_OUT")
+            or os.path.join(BASE, "代码", "诊断", "_p3_legacy.xlsx"))
 wb = openpyxl.load_workbook(template)
 report_days = range(REPORT, NDAYS)
 date0 = dt.date(2025, 1, 1)
@@ -382,9 +425,9 @@ for j, di in enumerate(report_days):
     for k in range(N):
         ws_p.cell(row=row, column=2 + k).value = round(float(plan_kwh[di][(k + 1) % N]), 4)
     ws_p.cell(row=row, column=2 + N).value = round(float(plan_kwh[di].sum()), 4)
-    ws_p.cell(row=row, column=3 + N).value = round(float(
-        (price_day * final_kwh[di]).sum() + (0.5 * price_day * np.abs(adj_kwh[di])).sum()
-        + (5 * price_day * em_kwh[di]).sum()), 2)
+    # 口径 A 全天总费。⚠ 两张购电量表写的是**同一个物理日**的全口径总费，
+    #   与 problem3_v3.py 的写盘器一致；读表只能取其一，**不可相加**。
+    ws_p.cell(row=row, column=3 + N).value = round(day_fee_A(di), 2)
 
 ws_a = wb["调整购电量"]
 for j, di in enumerate(report_days):
@@ -392,7 +435,8 @@ for j, di in enumerate(report_days):
     for k in range(N):
         ws_a.cell(row=row, column=2 + k).value = round(float(adj_kwh[di][(k + 1) % N]), 4)
     ws_a.cell(row=row, column=2 + N).value = round(float(adj_kwh[di].sum()), 4)
-    ws_a.cell(row=row, column=3 + N).value = round(float((0.5 * price_day * np.abs(adj_kwh[di])).sum()), 2)
+    # 同上：与「计划购电量」表同值（同一物理日的全口径总费），不是"仅调整费"。
+    ws_a.cell(row=row, column=3 + N).value = round(day_fee_A(di), 2)
 
 ws_c = wb["充放电量"]
 ws_c.delete_rows(2, ws_c.max_row - 1)
@@ -439,7 +483,7 @@ print("=" * 72)
 for di in special_idx:
     dstr = (date0 + dt.timedelta(days=di)).strftime("%Y.%m.%d")
     pl = plan_kwh[di].sum(); adj = adj_kwh[di].sum(); em = em_kwh[di].sum()
-    total_fee = (price_day * final_kwh[di]).sum() + (0.5 * price_day * np.abs(adj_kwh[di])).sum() + (5 * price_day * em_kwh[di]).sum()
+    total_fee = day_fee_A(di)
     print(f"\n【{dstr}】 计划 {pl:.2f}  调整 {adj:+.2f}  紧急 {em:.2f}  全天购电费 {total_fee:.2f} 元")
     print("  表1 计划购电量(kWh):", "  ".join(f"{w}={plan_kwh[di][i]:.2f}" for w, i in win_idx.items()))
     print("  表3 紧急购电量(kWh):", f"{em:.2f}")
