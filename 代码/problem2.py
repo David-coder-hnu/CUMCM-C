@@ -35,22 +35,30 @@
     于是 c^min ≤ ĝ+d 与 e ≥ L−P−ĝ−d 同时成立 —— 同一份 ĝ+d 既顶负载缺口又给电池充电，
     凭空造电（实测全年总费掉到 3,061,112 元，远低于完美预见下界 12,229,461 元）。
 
-四、保留（必须写进论文）
+四、实际执行层（写 result2.xlsx）
+    规划层给出最终计划购电量 g。执行层采用 execute_soc_causal：
+    当前时刻只用当前实际 L/P 与当前 SOC，优先放电覆盖负载缺口，富余再充电，
+    最后缺口才紧急购电；充放电功率与 SOC 全程严格受限。
+    result2.xlsx 中的充放电、紧急购电、费用和 SOC 均来自该实际执行轨迹。
+    问题 2 没有终端 SOC 约束，因此实际年末 SOC 不强制回到 6000。
+
+五、保留（必须写进论文）
     γ=1 的"可交付"是**对建模情景集**（同星期几的历史日）而言，不是分布无关的鲁棒保证。
-    自检口径见 soc_trace：充电按【全情景中最小的可得富余】保守重放，得到真实 SOC 的下界；
-    该下界 ≥ 1200 ⟺ 计划列出的放电量在任何情景里都放得出来。交付计划该下界 = 1200.0。
+    自检口径见 soc_trace：充电按【全情景中最小的可得富余】保守重放，得到真实 SOC 的下界。
+    交付结果采用 execute_soc_causal 在 2025 实际轨迹上重算，SOC 上下限逐槽自检。
 
     对照：点预测计划（负荷同星期几均值 + 光伏近 7 天均值）账面比 γ=1 便宜，
     但用同一保守口径重放，真实 SOC 下界为 **−902,669 kWh**（52,409 个槽低于 1200）。
     由于该重放本身就是真实 SOC 的下界，点预测计划**确凿不可交付** ——
     它便宜是因为把电池放穿了，计划里承诺的放电量根本不存在。不能引用它的价格。
 
-五、未竟事项（如实记录，勿在论文中夸大）
+六、未竟事项（如实记录，勿在论文中夸大）
     "把一阶段决策放进仿真回路标定"（ĝ 对着可执行的滚动 MPC 标定）**已尝试且失败**：
     在同一个诚实账本下，可执行的因果 MPC 全年最好只有 19,958,082 元，
-    比本模型的 15,187,755 元**贵 31%**。瓶颈不在 ĝ 规则，在执行器的跨时段 SOC 管理
+    比本模型最终实际执行成本 15,134,192 元**贵 31.9%**。瓶颈不在 ĝ 规则，
+    在执行器的跨时段 SOC 管理
     （标量末端影子价格 λ 无法同时表达"留住电量"与"用掉电量"）。
-    所以本文件交付的是**开环可交付计划**，不是"在线最优策略"。
+    所以本文件交付的是"γ=1 计划购电 + 严格 SOC 因果执行轨迹"，不是"在线最优策略"。
     详见 文档/问题2_求解归档.md §5。
 
 用法：
@@ -122,6 +130,37 @@ def soc_trace(g, d, cm):
     c_real = np.minimum(cm, np.maximum(0.0, g + d + surp_min))
     return SOC0 + np.concatenate([[0.0],
            np.cumsum(ETA * c_real * DT - d * DT / ETA)])
+
+
+def execute_soc_causal(g):
+    """严格满足 SOC 的因果实际执行策略（负荷缺口优先）。
+
+    每个 10 分钟时刻只使用当前实际 L/P、计划购电量 g_t 和当前 SOC：
+      1. 先用储能覆盖负载缺口，放电受 SOC 下限和 5000 kW 限制；
+      2. 剩余富余用于充电，充电受 SOC 上限和 5000 kW 限制；
+      3. 仍缺的电才紧急购电。
+
+    执行过程不回看未来时刻。返回实际操作量 c/d/e 和长度 T+1 的 SOC 轨迹。
+    """
+    c = np.zeros(T)
+    d = np.zeros(T)
+    e = np.zeros(T)
+    soc = np.empty(T + 1)
+    soc[0] = SOC0
+
+    for t in range(T):
+        deficit = max(0.0, L[t] - P[t] - g[t])
+        d_max_soc = max(0.0, (soc[t] - SOC_MIN) * ETA / DT)
+        d[t] = min(deficit, P_MAX, d_max_soc)
+
+        surplus = max(0.0, P[t] + g[t] + d[t] - L[t])
+        c_max_soc = max(0.0, (SOC_MAX - soc[t]) / (ETA * DT))
+        c[t] = min(P_MAX, surplus, c_max_soc)
+
+        e[t] = max(0.0, L[t] - P[t] - g[t] - d[t])
+        soc[t + 1] = soc[t] + (ETA * c[t] - d[t] / ETA) * DT
+
+    return c, d, e, soc
 
 
 def solve_deliver(gamma):
@@ -224,7 +263,8 @@ for d in range(NDAYS):
     lo = max(0, d - 7)
     P_hat[d] = pv[lo:d].mean(axis=0) if lo < d else pv.mean(axis=0)
 g_pt, c_pt, d_pt = solve_full_year((L_hat - P_hat).ravel())
-pt = honor_cost(g_pt, d_pt)
+c_pt_exec, d_pt_exec, e_pt_exec, soc_pt_exec = execute_soc_causal(g_pt)
+pt = honor_cost(g_pt, d_pt_exec)
 
 print("-" * 100)
 print(f"{'γ 可交付覆盖率':<24}{'计划费(元)':>14}{'紧急费(元)':>14}{'紧急kWh':>16}{'总费(元)':>16}")
@@ -242,10 +282,8 @@ for gamma in [float(x) for x in os.environ.get("GAMMAS", "0,0.25,0.5,0.75,1.0").
         best = (r[0], gamma, g, d, cm, soc)
 
 print("-" * 100)
-print(f"  点预测计划（同账本）     {pt[1]:>14,.0f}{pt[2]:>14,.0f}{pt[3]:>16,.0f}{pt[0]:>16,.0f}")
-sm_pt = soc_trace(g_pt, d_pt, c_pt).min()
-print(f"{'  └ 真实SOC下界':<24}{sm_pt:>14,.1f} kWh   "
-      f"（{'可交付' if sm_pt >= SOC_MIN - 1e-6 else '不可交付：账面便宜是因为把电池放穿了'}）")
+print(f"  点预测计划（同执行层）   {pt[1]:>14,.0f}{pt[2]:>14,.0f}{pt[3]:>16,.0f}{pt[0]:>16,.0f}")
+print(f"{'  └ 实际SOC范围':<24}[{soc_pt_exec.min():,.1f}, {soc_pt_exec.max():,.1f}] kWh")
 print(f"  哨兵：完美预见下界 {sent[0]:,.0f} 元 —— 任何低于它的结果都是 bug")
 # 自检：任何配置低于哨兵都说明模型被放松了（本项目已因此踩坑三次）
 _r = honor_cost(best[2], best[3])[0]
@@ -254,22 +292,29 @@ assert _r >= sent[0] - 1e-6, \
 
 # ---- 交付：γ=1（唯一可引用的一档）----
 g1, d1, cm1, soc1 = solve_deliver(1.0)[:4]
-r1 = honor_cost(g1, d1)
+c_exec, d_exec, e_exec, soc_exec = execute_soc_causal(g1)
+r1 = honor_cost(g1, d_exec)
+assert np.allclose(e_exec, np.maximum(0.0, L - g1 - P - d_exec), atol=1e-8)
+assert c_exec.min() >= -1e-9 and c_exec.max() <= P_MAX + 1e-6
+assert d_exec.min() >= -1e-9 and d_exec.max() <= P_MAX + 1e-6
+assert soc_exec.min() >= SOC_MIN - 1e-6 and soc_exec.max() <= SOC_MAX + 1e-6
 print()
 print("=" * 100)
-print(f"交付计划 γ=1：计划 {r1[1]:,.0f}  紧急 {r1[2]:,.0f} ({r1[3]:,.0f} kWh)  总 {r1[0]:,.0f} 元")
+print(f"规划层 γ=1：计划购电 {r1[1]:,.0f} 元")
+print(f"实际执行：紧急 {r1[2]:,.0f} 元 ({r1[3]:,.0f} kWh)  总 {r1[0]:,.0f} 元")
+print(f"实际 SOC：首 {soc_exec[0]:,.1f}  末 {soc_exec[-1]:,.1f}  "
+      f"范围 [{soc_exec.min():,.1f}, {soc_exec.max():,.1f}] kWh")
 print(f"  哨兵下界 {sent[0]:,.0f} 元 ｜ 高出 {(r1[0] / sent[0] - 1) * 100:.1f}%")
 print(f"  点预测   {pt[0]:,.0f} 元 ｜ γ=1 比它 {'省' if r1[0] < pt[0] else '贵'} "
       f"{abs(pt[0] - r1[0]):,.0f} 元")
 print("=" * 100)
 
 # ---- 写 结果/result2.xlsx（沿用 附件5 模板）----
-e1 = np.maximum(0.0, L - g1 - P - d1)
 g_day = (g1 * DT).reshape(NDAYS, N)
-c_day = (cm1 * DT).reshape(NDAYS, N)
-d_day = (d1 * DT).reshape(NDAYS, N)
-e_day = (e1 * DT).reshape(NDAYS, N)
-soc_midnight = soc1[::N]
+c_day = (c_exec * DT).reshape(NDAYS, N)
+d_day = (d_exec * DT).reshape(NDAYS, N)
+e_day = (e_exec * DT).reshape(NDAYS, N)
+soc_midnight = soc_exec[::N]
 
 
 def fmt_time(m):

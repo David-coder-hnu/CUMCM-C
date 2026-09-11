@@ -52,8 +52,38 @@ def sheet_by_label(ws):
             for c in range(2, ws.max_column + 1)}
 
 
+def normalize_time_label(label):
+    """统一模板中的小时格式，例如把 7:0-7:10 规范成 7:00-7:10。"""
+    if not isinstance(label, str) or "-" not in label:
+        return label
+
+    def normalize_time(value):
+        suffix = ""
+        if value.endswith("+1"):
+            suffix = "+1"
+            value = value[:-2]
+        hour, minute = value.split(":")
+        return f"{int(hour)}:{int(minute):02d}{suffix}"
+
+    left, right = label.split("-", 1)
+    try:
+        return f"{normalize_time(left)}-{normalize_time(right)}"
+    except (TypeError, ValueError):
+        return label
+
+
 def day_row(date):
     return (date - DAY0).days + 2
+
+
+def slot_key(i):
+    """按附件 5 的旋转表头生成第 i 个槽位标签。"""
+    if i == 0:
+        return "0:00-0:10+1"
+    start = i * 10
+    end = start + 10
+    end_label = "0:00+1" if end >= 24 * 60 else f"{end // 60}:{end % 60:02d}"
+    return f"{start // 60}:{start % 60:02d}-{end_label}"
 
 
 def _fmt(x, nd=2):
@@ -106,12 +136,12 @@ def read_daily(wb, sheet, di):
     """按标签取第 di 天（0=2025-02-01）的 144 槽购电量 → (np.array(144), 全天购电量, 全天购电费)。"""
     ws = wb[sheet]
     r = day_row(DATES[di])
-    lab2v = {ws.cell(row=1, column=c).value: (ws.cell(row=r, column=c).value or 0.0)
+    lab2v = {normalize_time_label(ws.cell(row=1, column=c).value):
+             (ws.cell(row=r, column=c).value or 0.0)
              for c in range(2, ws.max_column + 1)}
     g = np.empty(144)
     for i in range(144):
-        key = ("0:00-0:10+1" if i == 0 else
-               f"{i * 10 // 60}:{i * 10 % 60:02d}-{(i * 10 + 10) // 60}:{(i * 10 + 10) % 60:02d}")
+        key = normalize_time_label(slot_key(i))
         g[i] = lab2v[key]
     return g, lab2v.get("全天购电量"), lab2v.get("全天购电费")
 
@@ -176,7 +206,7 @@ def tables_p23(prob, use_plan=False):
         g, tot_c, fee_c = read_daily(wb, sheet, di)
         rows[date] = (g, tot_c, fee_c)
         v = [g[(int(s[:2]) * 60 + int(s[3:5])) // 10] for s in SLOTS]
-        print(f"| {date:%Y.%-m.%-d} | " + " | ".join(_fmt(x) for x in v)
+        print(f"| {date.year}.{date.month}.{date.day} | " + " | ".join(_fmt(x) for x in v)
               + f" | {_fmt(tot_c)} | {_fmt(fee_c)} |")
 
     print(f"\n### 表 2　储能设备在指定时间段的充放电量及 0:00 和 24:00 的储电量　[{fn}]\n")
@@ -185,7 +215,7 @@ def tables_p23(prob, use_plan=False):
     for date in DATES:
         cd, s0, s24 = read_blocks(wb, date)
         cell = " | ".join(f"{_fmt(c)} / {_fmt(d)}" for c, d in cd)
-        print(f"| {date:%Y.%-m.%-d} | {cell} | {_fmt(s0)} | {_fmt(s24)} |")
+        print(f"| {date.year}.{date.month}.{date.day} | {cell} | {_fmt(s0)} | {_fmt(s24)} |")
 
     print(f"\n### 表 3　指定日期的紧急购电量　[{fn}]\n")
     print("| 日期 | 紧急购电时间段 | 紧急购电量(kWh) |")
@@ -193,9 +223,9 @@ def tables_p23(prob, use_plan=False):
     for date in DATES:
         segs = read_emerg(wb, date)
         if not segs:
-            print(f"| {date:%Y.%-m.%-d} | — | 0 |")
+            print(f"| {date.year}.{date.month}.{date.day} | — | 0 |")
         for i, (t, k) in enumerate(segs):
-            print(f"| {date:%Y.%-m.%-d} | {t} | {_fmt(k, 4)} |" if i == 0
+            print(f"| {date.year}.{date.month}.{date.day} | {t} | {_fmt(k, 4)} |" if i == 0
                   else f"|  | {t} | {_fmt(k, 4)} |")
         print(f"|  | **当日合计** | **{_fmt(sum(k for _, k in segs), 2)}** |")
     return rows
@@ -213,8 +243,11 @@ def selfcheck_blocks(fn):
         socs.append((r, float(v)))
         if not (SOC_MIN - 1e-6 <= float(v) <= SOC_MAX + 1e-6):
             bad.append((r, float(v)))
-    gaps = [(r, a, b) for (r, a), (_, b) in zip(socs, socs[1:])
-            if abs(a - b) > 1e-6 and (r + 1) % 6 != 1]
+    gaps = []
+    for (r1, s1), (r2, s2) in zip(socs, socs[1:]):
+        # 跨日边界：前一日 24:00 与次日 0:00 必须相等。
+        if r2 - r1 == 5 and abs(s1 - s2) > 1e-6:
+            gaps.append((r1, s1, s2))
     print(f"[自检 C] {fn} 充放电量：报出 {len(socs)} 个储电量，越界 {len(bad)} 个，链断裂 {len(gaps)} 处")
     if bad:
         print("   越界：", bad[:5])
