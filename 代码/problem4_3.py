@@ -259,7 +259,6 @@ REPORT = 31
 S_HOUR = [0, 6, 12, 18]
 BLOCKS = [(0, 36), (36, 72), (72, 108), (108, 144)]
 
-TAU = float(os.environ.get("P4_TAU", 0.80))
 # τ' 是**调整层**的分位（6/12/18 档把后续时窗的目标净需求抬到哪一分位）。缺省 0.55 是
 # 实测定稿值：见 §调参。注意它远高于纯理论值 1/3 —— 因为 1.5p 的上调本身是在**不完美
 # 预报**下做的，理论临界比只对"确定能买到"成立。
@@ -270,7 +269,15 @@ TAUP = float(os.environ.get("P4_TAUP", 0.55))
 # 用全天单一 τ 会把这个结构差别抹平，正是单一 τ 下总费在 0.65–0.70 压成平台的原因。
 TAU_B = [float(x) for x in os.environ.get("P4_TAUB", "").split(",")] if os.environ.get("P4_TAUB") \
     else [0.80, 0.55, 0.55, 0.55]
+# ⚠ P4_TAU 是 TAU_B[0] 的**简写旋钮**（只扫 0:00 块那一个分位，实际调参中最常用）。
+#   历史坑：早期版本里 TAU 是一个**从未接入模型**的独立变量，只在日志里打印，
+#   于是扫 P4_TAU 会得到 13 个一字不差的总费却毫无报错 —— 一个静默的假阴性。
+#   现在它直接改写 TAU_B[0]，扫它必然生效；TAU 这个名字保留为 TAU_B[0] 的别名，
+#   使日志里打印的 τ 与真正进入模型的值恒等。
+if os.environ.get("P4_TAU"):
+    TAU_B[0] = float(os.environ["P4_TAU"])
 assert len(TAU_B) == 4, "P4_TAUB 需给 4 个数"
+TAU = TAU_B[0]                  # 仅供打印/诊断引用，恒等于模型真正使用的 0:00 块分位
 # λ 只在 EXEC="mpc"（自解执行）下起作用；缺省 EXEC="plan"（跟随计划充放电）时
 # 执行轨迹由 plan_day 的 LP 唯一确定，λ 完全不进模型 ⇒ 扫多个 λ 只会得到同一串数。
 LAMS = [float(x) for x in os.environ.get("P4_LAMS", "1.0").split(",")]
@@ -955,7 +962,7 @@ if __name__ == "__main__":
     print("=" * 118)
     print(f"问题 4（对应问题 3） · 口径 A · 波动电价   读法 {READING}   "
           f"电价加权分位 {'开' if WQ else '关'}   G_MAX={G_MAX:,.0f}")
-    print(f"  计划分位 τ={TAU}  调整分位 τ'={TAUP}  调整通道={'开' if ADJ else '关'}  "
+    print(f"  计划分位 τ_块={TAU_B}  调整分位 τ'={TAUP}  调整通道={'开' if ADJ else '关'}  "
           f"最高可用档位 {BANDS}（0=0:00, 1=+6:00, 2=+12:00, 3=+18:00）")
     print(f"  天数 {NDAYS_RUN}  计费窗口第 {WIN0 + 1}–{NDAYS_RUN} 天  "
           f"MPC 重解间隔 {MPC_RES} 槽  时域 {H_MAX}")
