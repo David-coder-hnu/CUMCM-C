@@ -293,7 +293,8 @@ def fig_q2_year():
     ax[0].axhline(1200, color="#888", ls=":", lw=1)
     ax[0].set_ylim(0, 11800)
     ax[0].set_ylabel("储电量 / kWh")
-    ax[0].legend(fontsize=9, loc="lower right")
+    # 不再放图例：右下角的方框会压住 8–12 月那段跌到 1500 附近的曲线，
+    # 而面板小标题与 y 轴标签已经说清这条线是什么。
     sub(ax[0], "(a) 全年日末储电量（334 天；日末值均在安全区间内）")
 
     ax[1].fill_between(x, emg, color=C_EMG, alpha=0.55, lw=0)
@@ -455,10 +456,12 @@ def fig_tau():
 
     a = ax[0]
     a.plot(t1, tot1 / 1e6, "-o", color=C_PLAN, lw=1.8, ms=6)
-    a.axvspan(0.40, 0.44, color=C_ADJ, alpha=0.18, lw=0)
+    # 平台只到 0.42--0.44：τ'=0.40 实测 13,648,228 元，比平台上限高 6,808 元，
+    # 圈进"最优区间"会与正文"极差 1,702 元"自相矛盾。
+    a.axvspan(0.42, 0.44, color=C_ADJ, alpha=0.18, lw=0)
     a.set_xlabel("可调段分位 $\\tau'$（盲窗固定 $\\tau_0=0.55$）")
     a.set_ylabel("总费用 / 百万元")
-    a.text(0.365, 13.668, "最优区间 0.40--0.44", fontsize=8.6, color="#8A5A10")
+    a.text(0.365, 13.668, "最优区间 0.42--0.44", fontsize=8.6, color="#8A5A10")
     sub(a, "(a) 可调段分位 $\\tau'$：两端翘起，内点最优")
 
     b = ax[1]
@@ -470,7 +473,9 @@ def fig_tau():
     b.plot([0.55], [13.641420], "o", ms=10, mfc="none", mec=C_EMG, mew=1.7)
     b.set_xlabel("盲窗分位 $\\tau_0$（可调段固定 $\\tau'=0.42$）")
     b.set_ylabel("总费用 / 百万元")
-    b.annotate("定稿取 0.55（13,641,420）\n已测最低点 0.55×0.44 低 1,702 元\n平台极差 1,702 元 / 0.012%",
+    # 说清"最低点"是二维格点上的最低，否则读者会拿本面板里更低的 0.52（13,640,019）
+    # 来质疑这句话 —— 0.52 是 τ₀ 一维扫描的点，与二维 (0.55,0.44) 不是同一个比较。
+    b.annotate("定稿取 0.55（13,641,420）\n二维格点最低 (0.55, 0.44)，低 1,702 元\n平台极差 1,702 元 / 0.012%",
                xy=(0.55, 13.641420), xytext=(0.63, 13.78),
                fontsize=8.4, color="#333",
                arrowprops=dict(arrowstyle="->", color="#666", lw=1.0))
@@ -588,7 +593,9 @@ def fig_q3_ablation():
                 f"高出下界 {(v-sent)/1e4:,.1f} 万元".replace(",", ","),
                 va="bottom", fontsize=7.6, color="#777")
     ax.axvline(sent / 1e6, color=C_GREY, ls="--", lw=1.3)
-    ax.text(sent / 1e6, 4.72, " 完美预见下界 12,229,461",
+    # 下界必须带读法：本消融列本身就是"无上界读法"，另一读法（G≤5000）下界是
+    # 12,406,053，两者不可跨读法并列 —— 归档与正文都要求标明。
+    ax.text(sent / 1e6, 4.72, " 完美预见下界 12,229,461（无上界读法）",
             fontsize=8.6, color="#555", va="center")
     ax.set_ylim(-0.75, 5.05)
     ax.set_yticks(y)
@@ -679,8 +686,11 @@ def fig_q4_price():
 def fig_q4_bill():
     """三项费用在两问之间的对比与增量。
 
-    数值与文档/问题4_求解归档.md §0 的表同源（该表以问题三前一版基准为分母，
-    与正文明示的 +70.66 / +5.18 / −3.65 万元是同一组数）。"""
+    两组数取自 文档/问题4_求解归档.md §0：问题三交付（常数价）12,553,753.39 /
+    780,042.88 / 307,624.11，问题四-三交付（波动电价）13,311,305.18 / 683,619.59 /
+    262,381.73。按此算出的增量是 **+75.76 / -9.64 / -4.52 万元**（正文 §5.4 用同一组）。
+    注意：旧稿里曾写作 +70.66 / +5.18 / -3.65 万元，那是上一版分母下的数，已作废；
+    改图时不要照旧稿回填。"""
     items = ["计划购电费", "超额费", "紧急购电费"]
     v3 = np.array([12553753, 780043, 307624], float)      # 问题三交付（新锚点）
     v4 = np.array([13311305, 683620, 262382], float)      # 问题四-三交付（波动电价）
@@ -796,7 +806,10 @@ def fig_q4_shift():
     a.set_xlabel("时刻 / h")
     a.set_ylabel("电价 / (元·kWh$^{-1}$)")
     a.set_xticks(np.arange(0, 25, 6))
-    a.legend(fontsize=8.2, loc="upper left")
+    # 图例一律移到坐标框下方：本面板四条曲线在 6--21 点都顶到 1.3 以上，
+    # 框内任何角落都会被压住，放到框外才不会遮挡。
+    a.legend(fontsize=7.6, ncol=2, loc="upper center", bbox_to_anchor=(0.5, -0.26),
+             frameon=False)
     sub(a, "(a) 三天电价与基准剖面仅差一个平移量")
 
     b = ax[1]
@@ -808,7 +821,8 @@ def fig_q4_shift():
     b.set_xlabel("时刻 / h")
     b.set_ylabel("电价 − 日均价 / (元·kWh$^{-1}$)")
     b.set_xticks(np.arange(0, 25, 6))
-    b.legend(fontsize=8.2, loc="upper left")
+    b.legend(fontsize=7.6, ncol=2, loc="upper center", bbox_to_anchor=(0.5, -0.26),
+             frameon=False)
     sub(b, "(b) 去掉日均价后形状基本一致（差异为日内残差）")
     fig.savefig(os.path.join(OUT, "fig_q4_shift.png"))
     plt.close(fig)
@@ -828,10 +842,13 @@ def fig_q4_pscale():
     ax.set_xlabel("结算价格缩放系数 $s$")
     ax.set_ylabel("总费用 / 百万元")
     ax.legend(fontsize=9, loc="lower right")
-    ax.text(0.715, 19.6,
+    # 文字必须落在坐标框内：原来锚在 19.6 百万处（自动 ylim 只到 ~19.0），
+    # 会跑到框外、把画布顶出一块空白。
+    ax.set_ylim(9.0, 19.6)
+    ax.text(0.715, 19.35,
             "13 档下策略（计划量/调整量/充放电/紧急购电）逐元素不变\n"
             "max$|$总费$(s)-s\\cdot$总费$(1)|$ = 0.000000 元",
-            fontsize=8.8, color="#333")
+            fontsize=8.8, color="#333", va="top")
     fig.savefig(os.path.join(OUT, "fig_q4_pscale.png"))
     plt.close(fig)
 
