@@ -45,21 +45,29 @@
 样本实现：对历史残差取分位时，用**该历史日同日同槽的实际电价 PR[q, t] 作权重**
 （WQ=1）。高价样本被推高权重，把分位向上抬。
 
-⚠⚠ **实测为负结果，故缺省关闭（P4_WQ=0）。** 三组对照（读法B、G≤5000）：
-      WQ=0 τ=0.80        15,443,245   ← 最优
-      WQ=1 τ=0.80        15,455,826   紧急购电 −6.3%（488,970→457,989），
-                                      但计划购电 +65,429，净亏 12,581
-      WQ=1 重扫 τ(=0.78) 15,453,379   仍输 10,134
-   τ 重扫（WQ=0）：0.70→15,467,307 ｜ 0.75→15,452,761 ｜ **0.80→15,443,245** ｜
-                   0.836→15,450,067 ｜ 0.86→15,460,124 ｜ 0.90→15,503,329
-   ⇒ **最优 τ 仍停在 0.80，没有出现理论预测的 0.836 上移。** 三点原因：
-     (a) τ=0.80 本就是**扫出来的经验最优值**，它已经吸收了价格结构，再加权是重复计数；
+⚠⚠ **实测为负结果，故缺省关闭（P4_WQ=0）。**
+   交付配置下实测（2026-09-12 第四次重基线 = 交付 τ 改取本问五维最优，
+   见 文档/问题4_求解归档.md §5.4 与 代码/诊断/diag_p4_readings.py）：
+      交付（读法B、WQ=0）   14,257,306.50 元   ← 交付值
+      读法B、WQ=1          14,259,940.09 元   贵 2,633.59 元（+0.018%）
+      读法A、WQ=1          14,132,277.67 元   （读法A 本来就便宜 126,247 元）
+   ⇒ **WQ=1 仍劣于 WQ=0，方向与早期一致、幅度很小。** 机理上的三点原因：
+     (a) τ 本就是**扫出来的经验最优值**，它已经吸收了价格结构，再加权是重复计数；
      (b) 储能的削峰作用把"缺/余"两侧的代价差削平了（v3 已记录过同一现象）；
-     (c) 0.75–0.86 整个区间只差 7,363 元（0.05%），效应幅度本就小于标定噪声。
-   ⇒ 正确表述是：**价格与缺口的正相关在数据里真实存在，但不改变最优策略。**
+     (c) 效应幅度本就小于标定噪声（0.018%）。
+   ⇒ 正确表述是：**价格与缺口的正相关在数据里真实存在，但不改变最优策略的账单量级。**
      这与 §Q4-1 的总结论（均匀平移不改变边际权衡）互为印证，是论文的正面结论。
+   ⚠ 但**不要把这句话扩张成「WQ 不影响决策」**：`diag_p4_readings.py` 的策略指纹列
+     （五个决策数组逐槽 md5）实测 **WQ=1 会改变策略**（读法 A 同样会）—— 它只是改得
+     **更贵**。真正"逐槽不变"的只有「读法 B 下换价格源」那一维（常数价对照，指纹相同）。
 
-对照：WQ=0 退回问题 3 的普通分位，可复现 result3.xlsx 的 14,712,825 元。
+  ⚠ 旧版此处曾把「WQ=1 使 WQ 反号（−33,270 元，即 WQ 更优）」列为一条待解释的例外，
+    并给出「0.80 是最优 τ」的扫描表（最优 τ 停在 0.80、未出现理论预测的 0.836 上移）。
+    **那两张表的数全部出自旧基线（读法B + G≤5000 + τ=0.80），已作废**；新基线上例外消失。
+    τ 的现行扫描见 文档/问题4_求解归档.md §5.2。⚠ **交付 τ 现在是本问自己的五维最优
+    (0.58, 0.36, 0.40, 0.70)/0.28**（不再继承问题 3）。
+
+对照：WQ=0 退回问题 3 的普通分位，可复现 result3.xlsx 的 13,641,420 元（见 §6.2 的失同步自检）。
 
 ════════════════════════════════════════════════════════════════════════════
 §Q4-4  两种读法（两者都做）
@@ -73,35 +81,56 @@
   ⚠ 读法 B 下，附件1 的角色从「结算价」变成「公布价」。这不是权宜之计：附件1 本来就
     是分时电价表，附件4 才是实际结算价，微网 0:00 能拿到的正是公布曲线。
 
-  ★★ 读法 B + WQ=0 下的**强结论（已实测，非推理）**：波动电价**不改变最优策略，只改变账单**。
-    理由不是估计，而是结构：读法 B 下所有**影响决策**的价格进入点（#3 exec_day 的 pr_d、
-    #4 plan_day 的价格系数，以及 #7 关闭时的普通分位）都退回 price_day，与 problem3_v3
-    **逐字相同**；只有 #2 哨兵、#5 结算、#6 写盘改用实际价。于是本文件的策略轨迹必然
-    与问题 3 完全相同 —— 实测验证（代码/诊断/diag_p4_audit.py 的 L2）：
-        结果/result3.xlsx 与 结果/result4-3.xlsx 的
-        「计划购电量」「调整购电量」「充放电量」「紧急购电量」四张表**逐格 bit-identical**，
-        全天购电量列零差异；只有「全天购电费」列不同：
-            14,712,825.34 元 → 15,443,245.19 元（×1.0496，+4.96%）
+  ★★ 读法 B + WQ=0 + **同 τ** 下的**强结论（已实测，非推理）**：波动电价**不改变最优策略，
+    只改变账单**。理由不是估计，而是结构：读法 B 下所有**影响决策**的价格进入点
+    （#3 exec_day 的 pr_d、#4 plan_day 的价格系数，以及 #7 关闭时的普通分位）都退回
+    `price_day`（附件1 公布剖面，**模块级常量，与 PRICE_SRC 无关**），与 problem3_v3
+    **逐字相同**；只有 #2 哨兵、#5 结算、#6 写盘改用实际价 `PR`。
+
+    ⚠⚠ **这条结论有前提，必须一起说：两侧 τ 必须相同。** 它是个**受控实验**（固定模型
+    超参、只换价格向量）。自 2026-09-12 第四次起，**交付 τ 已改为本问自己的五维最优**，
+    与问题 3 不再相同 ⇒ `result4-3.xlsx` 与 `result3.xlsx` 是"两个各自调过参的模型"，
+    **策略必然相异**（实测 65,333 格，见 §6.1b），而那个差异的成因是 **τ 不是价格**。
+    故本条结论改由**显式的受控消融**承载：
+        代码/诊断/diag_p4_cross_abl.py —— 把本文件钉在 _SHARED_TAU（= 问题 3 的交付 τ）
+        下跑一遍，与 result3.xlsx 逐元素比：**相异 0**，账单 13,641,420.40 → 14,404,088.05
+        （×1.055908，+5.59%）。14,404,088 是**那次消融跑的金额**，**不再是交付值**。
+        交付文件对照（本问最优 τ）见 代码/诊断/diag_p4_cross.py --deliv。
+    ⚠ **不要拿"交付文件逐格相同"当证据**（旧版此处就是这么写的，且写的是
+    "bit-identical"）：那在旧 τ 下偶然成立，τ 一改就变成一句假话。
     这一条把 §Q4-1 的「均匀平移不改变边际权衡」从**论证**升级为**两份独立交付物的互证**，
     是论文最硬的一条结论：**分时电价波动的经济后果全部落在账单上，不落在策略上。**
+    适用范围＝共享 τ；披露方式＝明写"受控消融，非交付配置"。
 
 ════════════════════════════════════════════════════════════════════════════
 §Q4-5  购电功率上界（自加假设，必须声明）
 ════════════════════════════════════════════════════════════════════════════
 题面（附录1）只给了储能「最大充放电功率 5000 kW」，**没有给微网与外网的联络线容量**。
-缺省 G_MAX=5000 是自加的保守假设，旋钮 P4_GMAX；字面读法放开：P4_GMAX=inf。
-⚠ 常数价下「放开反而更贵」（v3 实测 +35.8 万），但**波动电价下这个结论会翻转** ——
-  详见 文档/问题4_求解归档.md。论文必须如实报出这个反转。
+缺省 G_MAX=5000 是自加的保守假设，旋钮 P4_GMAX。
+★ **交付取 P4_GMAX=20000**：追索计划层下实测放开上界**更便宜** ——
+  4-3 省 454,723 元（−3.09%，`G≤5000` → `20000`），4-2 省 163,296 元（−1.11%）。
+  ⚠ 这与早期（确定性计划层时代）「放开反而更贵」的结论**相反**，论文必须如实报出；
+  详见 文档/问题4_求解归档.md §5.5／§7.2。
+  ⚠⚠ **20000 ≠ `inf`，但差的是数值不是模型。** 四臂实测（`诊断/diag_p4_gmax3.py`）：
+  峰值在上界 5000/20000/1e9/inf 下分别是 5,000.0 / 10,172.8 / 10,172.8 / 10,172.8 kW
+  ⇒ 只有 5000 那一格上界**是紧的**，后三者数学上是同一个 LP。可它们给出
+  0 / +218 / +1,180 元三个不同的数，且**随上界数值单调变差** —— 这是 HiGHS 在退化 LP
+  上的数值尺度效应（上界越大、系数尺度越差、单纯形挑的顶点越偏），**不是建模差异**。
+  故取 20000 = "非紧取值里条件数最好的那个"，而 `20000 ↔ inf` 的 83 ppm **不写进结论**。
 
-★★ 与上界直接相关的另一条**必须声明**的性质：交付表的购电量里有**12.23%** 既未供负载、
+★★ 与上界直接相关的另一条**必须声明**的性质：交付表的购电量里有**9.81%** 既未供负载、
   也未进电池。代数上（diag_p4_audit.py §L1）：令 S = P + g + d − L（富余），则
       能量平衡残差 = Σ(c − S)·1[S≥0] ≡ −Σ max(0, S − c) ≤ 0
-  实测该残差 = −2,647,466 kWh/年（占实际购电 12.23%，72.2% 的槽都有丢弃），
-  按 6 小时窗口分解：盲窗 13.4% / 6–12h 46.0% / 12–18h 29.4% / 18–24h 11.2%。
-  同时 **g 有 36.40% 的槽贴在 G_MAX=5,000 kW 上** ⇒ 这道自加上界是**紧的**，
-  它同时也是防止过度购电的唯一闸门（这也是放开上界反而更贵的原因）。
-  ⚠ 这不是问题 4 引入的：result3.xlsx 同法测得**完全相同的** −2,647,465 kWh，
-  即它是 problem3_v3（以及 problem2.py）继承下来的口径性质。
+  实测该残差 = −2,082,919 kWh/年（占实际购电 9.81%，丢弃槽占 22.1%），
+  按 6 小时窗口分解：盲窗 3.7% / 6–12h 14.4% / 12–18h 79.4% / 18–24h 2.6%。
+  ⚠ **它不是购电上界造成的**：交付读法下 max g = 1,695.46 kWh/槽 = **10,172.8 kW**，
+  上界 20,000 kW **完全不紧**（贴上限槽占比 0.00%）⇒ 再放开购电，这 9.81% 照样会丢。
+  （旧版本此处写「g 有 36.40% 的槽贴在 5,000 kW 上 ⇒ 上界是紧的，它是防止过度购电的
+   唯一闸门」—— 那是确定性计划层 + `G≤5000` 时代的数，交付读法一变就失效。）
+  ⚠ **问题的量随 τ 变**：改 τ 后交付表本身变了，这个残差从 −2,259,641（result3.xlsx，
+  问题 3 的 g）变成 −2,082,919（result4-3.xlsx，本问最优 τ 下的 g）。两者**不再相等** ——
+  同源之处只有**代数式**（残差 ≡ −Σ max(0, S−c) ≤ 0）与**成因**（富余被丢弃），
+  不是同一个数。别再写成"与问题 3 逐位相同"。
   口径含义：口径 A 是**照付不议（take-or-pay）**—— 承诺量 ĝ 全额付费、与实收无关，
   所以为对冲缺口而多买的电即便用不上也**已经付过钱**，账单本身自洽；
   但"购电量"这一列因此**不等于可交付电量**，论文必须写明，否则会被误读成该电量被利用了。
@@ -242,13 +271,15 @@ assert READING in ("A", "B"), f"P4_READING 只能是 A 或 B，实得 {READING!r
 # 加权分位开关：对历史残差取分位时，用**该历史日同日同槽的实际电价**作权重。
 # 动机：日水平因子 a_d 与日均净负荷 corr=0.982，缺口大的日子电价系统性更高，
 #       按电价加权应把分位往上推（有效紧急边际成本更高）。
-# ⚠ 实测**负结果**，故缺省关闭（P4_WQ=0）：
-#     读法B G≤5000  WQ=0 τ=0.80 → 15,443,245（最优）
-#                   WQ=1 τ=0.80 → 15,455,826   紧急 −6.3% 但计划 +65,429，净亏 12,581
-#                   WQ=1 重扫 τ（最优 0.78）→ 15,453,379，仍输 10,134
-#   机理在数据里真实存在，但换算不成收益：τ=0.80 本就是扫出来的经验最优值，
+# ⚠ 实测**负结果**，故缺省关闭（P4_WQ=0）。**交付配置（第四次重基线 τ）下的现行值**：
+#     读法B WQ=0（交付）→ 14,257,306.50      读法B WQ=1 → 14,259,940.09（贵 2,634）
+#     读法A 基线      → 14,131,059.01        读法A WQ=1 → 14,132,277.67（贵 1,219）
+#   两种读法下方向一致 ⇒ 负结论比旧基线更硬（旧注释记的 14,404,088/14,409,089 是在
+#   共享 τ 上量的，差值 5,001 不是错的，只是那个 τ 已不是交付 τ）。
+#   机理在数据里真实存在，但换算不成收益：τ 本就是扫出来的经验最优值，
 #   再加权等于重复计数；且储能的削峰作用把两侧代价差削平了。
 #   保留为机理探针，论文按负结果如实报出。
+#   ⚠ 旧注释记的 15,443,245 / 15,455,826（读法B + G≤5000 + τ=0.80）出自**旧基线**，已作废。
 WQ = bool(int(os.environ.get("P4_WQ", 0)))
 SOC_MIN = 1200.0
 SOC_MAX = 10800.0
@@ -259,21 +290,50 @@ REPORT = 31
 S_HOUR = [0, 6, 12, 18]
 BLOCKS = [(0, 36), (36, 72), (72, 108), (108, 144)]
 
-# τ' 是**调整层**的分位（6/12/18 档把后续时窗的目标净需求抬到哪一分位）。缺省 0.55 是
-# 实测定稿值：见 §调参。注意它远高于纯理论值 1/3 —— 因为 1.5p 的上调本身是在**不完美
-# 预报**下做的，理论临界比只对"确定能买到"成立。
-TAUP = float(os.environ.get("P4_TAUP", 0.55))
-# 分块临界分位 [0:00块, 6:00块, 12:00块, 18:00块]。缺省 (0.80, 0.55, 0.55, 0.55) 是定稿值。
+# τ' 是**调整层**的分位（6/12/18 档把后续时窗的目标净需求抬到哪一分位）。
+#
+# ⚠⚠ 2026-09-12 第二次换基准：τ **必须随计划层重调**，本文件跟随问题 3 的追索计划层，
+#    故 τ' 由 0.55 改为 **0.42**、τ₀ 由 0.80 改为 **0.55**（= P3 交付配置）。
+#    旧值 (0.80, 0.55) 是**确定性计划时代**的定稿，搬到追索计划层下偏贵 185,974 元
+#    （问题 3 实测 13,822,501 vs 13,630,568）。**"τ 的最优位置不随配置移动"的旧断言已作废。**
+#    机理：追索计划层的 c/d 本身就逐情景对冲，把两侧代价削平，有效临界分位整体下移。
+#    **τ 只能扫、不能推** —— 静态理论给 0.80（第 0 块不可调整）与 1/3（可 1.5p 上调兜底），
+#    两个理论值都被实测推翻。
+#
+# ★★ 2026-09-12 第三次：**交付 τ 不再继承问题 3，改取本问自己的五维最优。**
+#    第二次换基准时 τ=(0.55,0.42,0.42,0.42) 是**逐位照抄问题 3** 的，那是刻意的受控
+#    对照（只有 τ 相同，「只换价格向量」才是受控实验）。但 `diag_p4_tau_opt.py` 的
+#    五维坐标下降实测：把 τ₁/τ₂/τ₃ 各自放开（不止绑成一条 τ'）后可达 **14,257,306.50 元**，
+#    比照抄版省 **146,781.57 元（1.019%）** —— 支付不起的对照代价。
+#    故交付改取本问最优，**§6.1 那条「逐槽相异 0」随之降级为受控消融**
+#    （固定共享 τ 跑一遍，标题写明它是消融，不是交付配置下的头条验证）。
+#    ⚠ 用户指令（2026-09-12）：**"问题四现在交付的答案不是我们已知的最优结果，
+#      我需要你归档并交付一个问题四的已知的最好的结果"** —— 本次改动即为此。
+#    共享 τ 仍完整保留在下面的 `_SHARED_TAU` 里，常数价回归/失同步自检用它。
+#
+# ★★ 交付 τ 在**本文件内的单一真源**（2026-09-12）：下面两个缺省值与被 `_DELIVERY`
+#    声明的那一份**同引这两行**。原先两处各写一份字面量，于是"交付 τ 改了、缺省没改"
+#    时，裸跑 `python 代码/problem4_3.py` 会安静地跑在旧 τ 上 —— 自检会报「≠ 交付配置」
+#    （所以不会静默出错数），但**看起来像脚本坏了**，而真正的原因是缺省值没人同步。
+_DELIV_TAU_B = [0.58, 0.36, 0.40, 0.70]     # ← 五维搜索的最优点（见 代码/诊断/diag_p4_tau_opt.py）
+_DELIV_TAU_P = 0.28
+TAUP = float(os.environ.get("P4_TAUP", _DELIV_TAU_P))
+# 分块临界分位 [0:00块, 6:00块, 12:00块, 18:00块]。缺省 = 交付 τ（`_DELIV_TAU_B`）。
 # 0:00–6:00 那一块**不可调整**（6:00 档发布前已执行完），缺口只能用 5p 紧急购电补，
-# 故临界比 = 4p/(4p+p) = 0.80；后三块可用 1.5p 上调兜底，临界比低得多。
+# 故静态临界比 = 4p/(4p+p) = 0.80；后三块可用 1.5p 上调兜底，临界比低得多。
 # 用全天单一 τ 会把这个结构差别抹平，正是单一 τ 下总费在 0.65–0.70 压成平台的原因。
 TAU_B = [float(x) for x in os.environ.get("P4_TAUB", "").split(",")] if os.environ.get("P4_TAUB") \
-    else [0.80, 0.55, 0.55, 0.55]
+    else list(_DELIV_TAU_B)
 # ⚠ P4_TAU 是 TAU_B[0] 的**简写旋钮**（只扫 0:00 块那一个分位，实际调参中最常用）。
 #   历史坑：早期版本里 TAU 是一个**从未接入模型**的独立变量，只在日志里打印，
 #   于是扫 P4_TAU 会得到 13 个一字不差的总费却毫无报错 —— 一个静默的假阴性。
 #   现在它直接改写 TAU_B[0]，扫它必然生效；TAU 这个名字保留为 TAU_B[0] 的别名，
 #   使日志里打印的 τ 与真正进入模型的值恒等。
+# ⚠ 但简写旋钮必须**拒绝静默覆盖**：P4_TAU 与 P4_TAUB 同时给出时，两者会互相遮蔽而
+#   不报错（"设了 4 个分位却发现只有第 0 块生效"）。故同时给出直接报错，不再猜测意图。
+if os.environ.get("P4_TAU") and os.environ.get("P4_TAUB"):
+    raise SystemExit("⚠ P4_TAU 与 P4_TAUB 不能同时给出（前者会静默覆盖后者的第 0 项）。"
+                     "要设全 4 块分位请只用 P4_TAUB，要只扫第 0 块请只用 P4_TAU。")
 if os.environ.get("P4_TAU"):
     TAU_B[0] = float(os.environ["P4_TAU"])
 assert len(TAU_B) == 4, "P4_TAUB 需给 4 个数"
@@ -291,8 +351,53 @@ MPC_RES = int(os.environ.get("P4_RES", 1))
 H_MAX = int(os.environ.get("P4_H", 144))
 DO_SENT = bool(int(os.environ.get("P4_SENT", 1)))
 DO_WRITE = bool(int(os.environ.get("P4_WRITE", 1)))   # 跑完把最优配置写 结果/result4-3.xlsx
+# ⚠ P4_NOWRITE 是 P4_WRITE 的**反向别名**，与 problem4_2.py / 诊断脚本的既有写法对齐。
+#   加它的原因是踩到了一个**静默**的坑：`diag_p4_readings.py` / `diag_p4_tau.py` 一直在设
+#   `P4_NOWRITE=1` 并以为不会写盘，但早期本文件**根本不读这个变量**，于是这两个脚本的
+#   **每一行都覆盖一次 `结果/result4-3.xlsx`** —— 诊断跑完，交付文件就成了那一行的配置，
+#   而日志里看不出任何异常。这与 `run_problem4.py` 用 `setdefault` 修掉的是同一类故障：
+#   **看着对的复现命令，实际执行的是另一回事。** 两个变量都设时以"不写"为准。
+NOWRITE = os.environ.get("P4_NOWRITE", "") not in ("", "0")
+if NOWRITE:
+    DO_WRITE = False
 PLAN = os.environ.get("P4_PLAN", "lp")      # "lp" = 日前套利 LP ｜ "quant" = 追负荷分位规则
 EXEC = os.environ.get("P4_EXEC", "plan")    # "plan" = 跟随计划充放电 ｜ "mpc" = 只收 ĝ 自己重解
+# ★ 2026-09-12 第二次跟基准：把日前计划的充放电 (c,d) 改成问题 2 的**追索变量**（逐情景 ω），
+#   与问题 3 的 `P3_REC` 严格同构。计划层只承诺 ĝ，c/d/e/S 全部降为二阶段追索变量，
+#   执行层改走 exec_causal_day 因果落地。P4_REC=0 退回确定性 plan_day（= 本文件旧行为）。
+REC = bool(int(os.environ.get("P4_REC", 1)))
+
+# ── 交付配置自检：跑之前先告诉使用者"这一跑算不算交付值" ──────────────────
+# 旋钮一多，"跑了个非交付配置却以为拿到交付值"是最容易踩的坑。本文件的旋钮比问题 3
+# 还多一层（READING / WQ / PSCALE / PRICE_SRC），故自检的必要性更高。
+_DELIVERY = dict(rec=True, gmax=20000.0, taub=list(_DELIV_TAU_B), taup=_DELIV_TAU_P,
+                 reading="B", wq=False, pscale=1.0, price_src="att4",
+                 span=7, level=True, bands=3, anchor="prev", adj=True,
+                 plan="lp", exec_="plan", lams=[1.0], total=14_257_306.5,
+                 # 这四个是"跑多长/多细"的旋钮，早期漏在 is_shape() 之外 —— 于是
+                 # `P4_DAYS=60` 一类的**计时跑**会被判成"交付配置"，自检报"✅ 本配置 = 交付配置"
+                 # 而那个总费根本不是交付值。它们是形状的一部分，补进来。
+                 days=NDAYS, minr=14, res=1, h=144)
+# ⚠ `total` 是**声明值**，供各诊断脚本引用（免得六七处各抄一个 14,257,306.50）。
+#   它不是装饰：`__main__` 在 `is_delivery()` 为真时会拿实得总费与它硬对账，
+#   对不上直接 SystemExit(1) —— 与 `P3_DELIVERY_TOTAL` 同一套思路，
+#   把"改完 τ 忘了同步下游"从静默漂移变成一条会响的报警。
+
+# ★ τ **不放进 `is_shape()`**，另立一份"与问题 3 共享的 τ"。理由是一个真实会踩的坑：
+#   交付 τ 从本行起是**本问自己的最优**（五维搜索，见 代码/诊断/diag_p4_tau_opt.py），
+#   而失同步自检（常数价回归 ⟹ 复现问题 3 交付值）**必须站在与问题 3 逐位相同的 τ 上**
+#   才成立 —— 那个回归比的正是"同模型、换价格"，τ 不同就不是同一个模型了。
+#   若两者共用一个常量，换 τ 之后那条自检会在**完全正常**的配置上报 ❌ 失同步：
+#   一个由自检自身设计缺陷制造的假警报。（真警报的价值全靠它不喊狼来了。）
+_SHARED_TAU = dict(taub=[0.55, 0.42, 0.42, 0.42], taup=0.42)   # = 问题 3 的交付 τ
+# ⚠ _IS_DELIVERY 的求值放在数据段之后（它要比较 PSCALE 与 P4_PRICE_SRC，那两个到那里才定）。
+# 问题 3 的交付总费 —— **失同步自检**的基准值（见 __main__）。问题 3 换了基准而本文件
+# 没跟上的话，常数价格回归会给出别的数；把它钉在这里，使"失同步"从静默漂移变成硬报错。
+# ⚠ 问题 3 若再次定稿，**这一行必须同步更新**。这是本自检唯一的失效模式 —— 而且它
+#    **已经真的发生过一次**：2026-09-12 问题 3 第三次定稿（整点锚点去前视，见下），
+#    13,630,568 → 13,641,420，本行没跟上，自检立刻报 ❌ 而非静默给出错数。
+#    这正是本机制存在的意义：**它愿意报错，就不会悄悄漂移。**
+P3_DELIVERY_TOTAL = 13_641_420.0     # 问题 3 第三次定稿（P3_ANCHOR=prev 去前视后）
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -327,6 +432,79 @@ price = np.tile(price_day, NDAYS)
 PSCALE = float(os.environ.get("P4_PSCALE", 1.0))
 PR = PR * PSCALE
 price_real = PR.ravel()
+PRICE_SRC = os.environ.get("P4_PRICE_SRC", "att4").strip().lower()
+
+# 交付配置自检（见上方 _DELIVERY 的说明）。放在这里是因为它要比较 PSCALE / PRICE_SRC。
+# ⚠ 拆成两个判据，**不能合成一个**：失同步自检恰恰要在 PRICE_SRC=="att1"（回归模式）下
+#   触发，而那个模式下 `price_src` 必然不等于交付值 "att4"。早先合并成一个 `_IS_DELIVERY`
+#   时，自检在那个唯一该生效的场景里恒为假 —— 一条永不触发的断言。
+def is_shape():
+    """**形状**判据：除价格源与 **τ** 外的全部交付旋钮是否一致。
+
+    ⚠ τ 不在这里，见 `_SHARED_TAU` 与 `tau_is()`：交付 τ 是本问自己的最优，
+      而失同步自检要的是与问题 3 共享的 τ，两者不同，必须各判各的。
+
+    ⚠ 必须是函数、在**调用时**求值，不能写成模块级的 `_SHAPE = (...)`：`ANCHOR`
+      （第 438 行）与 `GRP_SPAN`（第 459 行）都在本行**之后**才绑定，模块级引用会
+      直接 `NameError`。
+    ⚠ 下面 ANCHOR/LEVEL/BANDS/GRP_SPAN/ADJ/PLAN/EXEC 七项都是**后加**的。加它们之前，
+      每一项都能**静默冒充交付配置**：`P4_ANCHOR=next` 正是去前视 A/B 的对照旋钮
+      （会给含 10 分钟前视的偏乐观值），LEVEL/BANDS/GRP_SPAN 改调整层与分位取样，
+      ADJ 直接开关调整通道，PLAN/EXEC 换的是**算法本身**。任一项被改，跑出来的都
+      不是交付值，而旧自检会说"是"。**失效方向是"假通过"**，这正是自检最该避免的。
+    """
+    return (REC == _DELIVERY["rec"] and abs(G_MAX - _DELIVERY["gmax"]) < 1e-9
+            and READING == _DELIVERY["reading"] and WQ == _DELIVERY["wq"]
+            and abs(PSCALE - _DELIVERY["pscale"]) < 1e-9
+            and ANCHOR == _DELIVERY["anchor"] and LEVEL == _DELIVERY["level"]
+            and BANDS == _DELIVERY["bands"] and GRP_SPAN == _DELIVERY["span"]
+            and ADJ == _DELIVERY["adj"]
+            and [round(x, 6) for x in LAMS] == _DELIVERY["lams"]
+            and PLAN == _DELIVERY["plan"] and EXEC == _DELIVERY["exec_"]
+            and NDAYS_RUN == _DELIVERY["days"] and MINR == _DELIVERY["minr"]
+            and MPC_RES == _DELIVERY["res"] and H_MAX == _DELIVERY["h"])
+
+
+def tau_is(d):
+    """当前 τ 是否等于 `d["taub"]`／`d["taup"]`。
+
+    ⚠ τ **故意不在 `is_shape()` 里**（见 `_SHARED_TAU` 的说明）：交付 τ 是本问自己的
+      最优，而失同步自检要的是"与问题 3 共享的 τ" —— 两个不同的量，必须各判各的。
+    """
+    return ([round(x, 6) for x in TAU_B] == d["taub"]
+            and abs(TAUP - d["taup"]) < 1e-9)
+
+
+def is_delivery():
+    """交付判据 = 形状一致 **且** τ 为交付 τ **且** 价格源为 att4。"""
+    return is_shape() and tau_is(_DELIVERY) and PRICE_SRC == _DELIVERY["price_src"]
+
+
+def is_sync_check():
+    """失同步自检该不该跑：形状一致、τ 与**问题 3 共享**、且处于常数价回归模式。
+
+    ⚠ 必须用 `is_shape()` 而**不是** `is_delivery()`：本自检恰恰要在
+      `PRICE_SRC=="att1"` 下触发，而那时 `price_src` 必不等于交付值 "att4"。
+      早先合并成一个判据时，自检在那个唯一该生效的场景里恒为假 —— 一条永不触发的断言。
+    ⚠ τ 同样必须判 `_SHARED_TAU` 而**不是**交付 τ：换 τ 之后两者不再相同，用交付 τ
+      去判会让这条自检**只在换 τ 之后失效**，而它恰恰是拿来防交付值漂移的。
+    """
+    return is_shape() and tau_is(_SHARED_TAU) and PRICE_SRC == "att1"
+
+
+def delivery_knobs():
+    """列出**当前**全部交付相关旋钮 —— 自检报"≠ 交付"时一眼看出是哪一项差。
+
+    ⚠ 新增旋钮时这里和 `is_shape()` 都要加；只加 `is_shape()` 会让"报错却看不出差在
+      哪"，只加这里则等于没检查。两处的项应当一一对应。
+    """
+    return [f"P4_REC={int(REC)}", f"P4_GMAX={G_MAX:g}",
+            "P4_TAUB=" + ",".join(f"{x:g}" for x in TAU_B), f"P4_TAUP={TAUP:g}",
+            f"P4_READING={READING}", f"P4_WQ={int(WQ)}", f"P4_PSCALE={PSCALE:g}",
+            f"P4_PRICE_SRC={PRICE_SRC}", f"P4_ANCHOR={ANCHOR}",
+            f"P4_LEVEL={int(LEVEL)}", f"P4_BANDS={BANDS}", f"P4_GSPAN={GRP_SPAN}",
+            f"P4_ADJ={int(ADJ)}", f"P4_LAMS={','.join(f'{x:g}' for x in LAMS)}",
+            f"P4_PLAN={PLAN}", f"P4_EXEC={EXEC}"]
 
 
 def wquantile(v, w, q, axis=0):
@@ -353,6 +531,12 @@ def wquantile(v, w, q, axis=0):
         out = np.where(bad, np.quantile(v, q, axis=0), out)
     return out
 
+# ── 光伏预报：附件 3 是【整点】预报，而模型要的是【144 槽】────────────────────
+# 题面（C题.md:54）与附件 3 的列头（预报1小时…预报24小时）都写明：每天 4 档、每档
+# 给出**未来 24 小时整点**的光伏功率，而决策分辨率是 144 槽/天（附件 1/2/4 均为
+# 10 分钟区间）⇒ **必须补一条「逐小时 → 144 槽」的还原约定**。
+# 本脚本用**线性插值**、锚点在**槽的结束时刻**（与附件 1/2 的右端点标号约定自洽）。
+# 实测择优依据（不做插值会带进 4–6 倍误差）见 代码/诊断/diag_p3_hourly.py。
 Wm = np.zeros((N, 25))
 for k in range(N):
     t = (k + 1) / 6.0
@@ -362,16 +546,33 @@ for k in range(N):
     else:
         Wm[k, lo] = 1.0 - (t - lo); Wm[k, hi] = t - lo
 
+# 发布时刻那一根锚点 H[S] 取哪个槽：
+#   "prev"（缺省，**严格因果**）= pv[d, 6S−1]，发布时刻 S:00 **已观测完**的最后一个 10min 槽；
+#   "next"（旧行为，**含 10 分钟前视**）= pv[d, 6S]，发布时刻 **之后**那 10min 的实测。
+# 附件 1/2 的槽按**结束时刻**标号 ⇒ 槽 6S 覆盖 (S:00, S:10]，其真值要到 S:10 才完整 ——
+# 在 S:00 发布时用它，就是**用到了 10 分钟后才知道的信息**。旧行为偏乐观（预报优于合法可得）。
+#
+# ⚠ 这一行是本文件交付值的**来源变更之一**（其余：低需求日分组、追索计划层、五维最优 τ）。
+#   去前视使问题 3 交付 13,630,568 → **13,641,420**（+10,852 元）。
+#   问题 4-3 那一侧在**共享 τ** 下是 14,392,700 → 14,404,088（+11,388 元）；
+#   换成本问五维最优 τ 后是 14,252,051 → **14,257,306**（+5,256 元，交付值）。
+#   **不是调参，是纠错**：与问题 2 已确立的"前视窗口不可用"同一原则。
+#   两次测量都显示前视**更便宜**，方向一致 ⇒ 结论不随 τ 变。
+#   A/B 证据：_ab_prev.log（因果，本缺省）/ _ab_next.log（含前视），
+#   还原约定择优：代码/诊断/diag_p3_hourly.py。
+ANCHOR = os.environ.get("P4_ANCHOR", "prev")
+
 
 def pv_fc(d, s):
     """第 d 天第 s 档（0/6/12/18 时发布）预报的当日 144 槽光伏。
 
     `预报k小时` = 发布后第 k 小时 ⇒ H[h] = fc3[d,s,h−s_hour−1]，h ≥ s_hour+1。
     跨到次日的部分被更晚发布的同目标档位支配，丢弃无损（实测见 §3）。
+    锚点 H[S] 取发布时刻**已观测完**的槽，见上面 ANCHOR 的说明。
     """
     H = np.zeros(25)
     if S_HOUR[s] > 0:
-        H[S_HOUR[s]] = pv[d, 6 * S_HOUR[s]]
+        H[S_HOUR[s]] = pv[d, 6 * S_HOUR[s] - (1 if ANCHOR == "prev" else 0)]
     for h in range(S_HOUR[s] + 1, 25):
         H[h] = fc3[d, s, h - S_HOUR[s] - 1]
     return H @ Wm.T
@@ -393,19 +594,29 @@ def low_demand_dows(train_days):
     return (int(order[0]), int(order[1]))
 
 
-# ⚠ L_base 口径 = problem3_v3.py 定稿（低需求日分组 {Fri,Sat}，回看 7 天），
+# ⚠ L_base 口径 = problem3 定稿（低需求日分组 {Fri,Sat}，回看 7 天），
 #   不是本文件早先的「同星期几 K=4」。换口径的理由与实测见 文档/问题4_求解归档.md：
 #   换基线前 problem4_3 与 result3.xlsx 逐元素相同，换基线后必须同步移植才能保住
-#   那条交叉验证。span=7 取 P3 定稿值 —— P3 实测 span6 比 span7 贵 32,095（14,317,826
-#   vs 14,285,731），因为低需求日只剩 1 个样本、情景均线形状失真，故 P3 不能用 6。
+#   那条交叉验证。span=7 取 P3 定稿值 —— P3 实测 span6 比 span7 贵（追索基线下 10,721 元），
+#   因为低需求日只剩 1 个样本、情景均线形状失真，故 P3 不能用 6。
 #   本文件的残差那一路不受影响：net_hist 是逐日累积的全历史池，已等价于 P3_HSRC="all"。
 GRP_DOWS = low_demand_dows(np.arange(0, GRP_TRAIN))
 _gm = np.array([(d % 7) in GRP_DOWS for d in range(NDAYS)])
 
+
+def _grp_idx(d):
+    """与第 d 天同组、且落在回看窗口内的历史日（严格 < d）。与 problem3 逐字同构。"""
+    lo = max(0, d - GRP_SPAN) if GRP_SPAN > 0 else 0
+    return [t for t in range(lo, d) if _gm[t] == _gm[d]]
+
+
+# LB_IDX[d] = 第 d 天 L_base 的取样日。追索计划层的 _scenarios() 也复用它 —— 同一份
+# "同伴日"定义同时供基线均值与情景集使用，两处若各写一份就会悄悄漂移。
+LB_IDX = [_grp_idx(d) for d in range(NDAYS)]
+
 L_base = np.zeros_like(load)
 for d in range(NDAYS):
-    idx = [t for t in range(max(0, d - GRP_SPAN), d) if _gm[t] == _gm[d]]
-    L_base[d] = load[idx].mean(axis=0) if idx else load.mean(axis=0)
+    L_base[d] = load[LB_IDX[d]].mean(axis=0) if LB_IDX[d] else load.mean(axis=0)
 
 F_hat = L_base[:, None, :] - P_hat      # (365,4,144)
 WIN0 = min(REPORT, NDAYS_RUN)
@@ -711,6 +922,123 @@ def plan_day(soc_in, Nt, pr, soc_end=None):
 
 
 # ════════════════════════════════════════════════════════════════════════
+# 追索计划层（P4_REC=1）—— 与 problem3_recourse.py 同构
+# ════════════════════════════════════════════════════════════════════════
+def exec_causal_day(d, g_day, soc):
+    """追索计划层下的执行器：计划层只给 ĝ（c/d 无单一实值），逐槽因果贪心落地。
+
+    每个槽按"先放电、再充电"的顺序处理，且充电只吃**已经发生**的富余 —— 全因果，
+    不含任何当日未来信息。返回 (c, d, e, soc)。
+    """
+    c = np.zeros(N); d_ = np.zeros(N); e = np.zeros(N)
+    for t in range(N):
+        deficit = max(0.0, load[d, t] - pv[d, t] - g_day[t])
+        d_max_soc = max(0.0, (soc - SOC_MIN) * ETA / DT)
+        d_[t] = min(deficit, P_MAX, d_max_soc)
+        surplus = max(0.0, pv[d, t] + g_day[t] + d_[t] - load[d, t])
+        c_max_soc = max(0.0, (SOC_MAX - soc) / (ETA * DT))
+        c[t] = min(P_MAX, surplus, c_max_soc)
+        e[t] = max(0.0, load[d, t] - pv[d, t] - g_day[t] - d_[t])
+        soc += (ETA * c[t] - d_[t] / ETA) * DT
+    return c, d_, e, soc
+
+
+def _scenarios(d, Nt):
+    """第 d 天 0:00 的追索情景集：以当日预报净需求 Nt=F̂+h 为中心 + 历史同组日的形变。
+
+    与问题 2 追索模型同一思路 —— 情景取"历史同组日"，但要保留预报，故把历史同伴的
+    净需求**平移**到当日预报水平：Ns[ω] = Nt + (actual_net[peer_ω] − 同伴均值)。
+    即保留当日预测 F̂，只用历史同伴提供"逐槽误差形状"。
+    无历史同伴（暖机期头几天）→ 退化为单情景 Nt，追索 LP 与确定性 plan_day 等价。
+
+    ⚠ 同伴日与 L_base 共用 LB_IDX，两处口径不会漂移。
+    """
+    pidx = LB_IDX[d]
+    if not pidx:
+        return Nt[None, :]
+    base = actual_net[pidx]                      # (K, 144) 历史同组日净需求
+    return Nt[None, :] + (base - base.mean(axis=0))
+
+
+def plan_day_recourse(soc_in, Ns, pr, soc_end=SOC0):
+    """日前**两阶段追索** LP（口径 A 计划层的充放电改成问题 2 的追索变量）。
+
+    只有购电量 ĝ 是 0:00 一阶段承诺；储能充放电 c/d、紧急 e、SOC 全部降为逐情景 ω 的
+    二阶段追索变量。逐情景 ω 的约束与 plan_day 完全相同（充电只吃富余 + 负荷必须供上
+    + SOC 递推 + 日末回归 soc_end），目标改为应急期望：
+
+        min  Σ p_t·ĝ_t·Δt  +  (1/K) Σ_ω Σ_t 5p_t·e_{t,ω}·Δt
+        s.t.（逐 ω） S_{t+1,ω} = S_{t,ω} + ηΔt·c_{t,ω} − (Δt/η)·d_{t,ω}
+                     c_{t,ω} − d_{t,ω} ≤ ĝ_t − N_{t,ω}      （充电只吃富余）
+                     d_{t,ω} + e_{t,ω} ≥ N_{t,ω} − ĝ_t      （负荷必须供上）
+                     S_{0,ω}=soc_in, S_{T,ω}=soc_end,  c,d∈[0,P_MAX], S∈[1200,10800], e≥0
+
+    参数：soc_in 当日 0:00 SOC；Ns (K,144) 情景净需求；pr 分时电价；soc_end 日末目标。
+    返回 (ĝ,) —— 追索 c/d 无单一实值，执行层用 exec_causal_day 因果落地。
+
+    ⚠ pr 由调用方决定：读法 B 传告示价 price_day，读法 A 传当日实际价 PR[d]。
+      这是问题 4 相对问题 3 的唯一接口差异（问题 3 恒传 price_day）。
+    """
+    K, T = Ns.shape
+    G0 = 0
+    C0 = T
+    D0 = C0 + K * T
+    S0 = D0 + K * T
+    E0 = S0 + K * (T + 1)
+    nv = E0 + K * T
+
+    obj = np.zeros(nv)
+    obj[G0:G0 + T] = pr * DT
+    for w in range(K):
+        obj[E0 + w * T:E0 + (w + 1) * T] = 5.0 * pr * DT / K
+
+    # SOC 递推（每情景 T 行）：S_{t+1,ω} − S_{t,ω} − ηΔt·c_{t,ω} + (Δt/η)·d_{t,ω} = 0
+    i = np.arange(T)
+    rows, cols, dat = [], [], []
+    for w in range(K):
+        base = w * (T + 1)
+        r = w * T + i
+        rows += [r, r, r, r]
+        cols += [S0 + base + i + 1, S0 + base + i, C0 + w * T + i, D0 + w * T + i]
+        dat += [np.ones(T), -np.ones(T), -ETA * DT * np.ones(T), (DT / ETA) * np.ones(T)]
+    A_eq = sparse.coo_matrix((np.concatenate(dat),
+                              (np.concatenate(rows), np.concatenate(cols))),
+                             shape=(K * T, nv)).tocsr()
+    b_eq = np.zeros(K * T)
+
+    # 不等式（每情景 2T 行）：充电只吃富余 c−d−ĝ ≤ −N；负荷必须供上 −d−e−ĝ ≤ −N
+    ur, uc, ud = [], [], []
+    for w in range(K):
+        r0 = w * (2 * T) + i
+        r1 = w * (2 * T) + T + i
+        ur += [r0, r0, r0, r1, r1, r1]
+        uc += [C0 + w * T + i, D0 + w * T + i, G0 + i,
+               D0 + w * T + i, E0 + w * T + i, G0 + i]
+        ud += [np.ones(T), -np.ones(T), -np.ones(T),
+               -np.ones(T), -np.ones(T), -np.ones(T)]
+    A_ub = sparse.coo_matrix((np.concatenate(ud),
+                              (np.concatenate(ur), np.concatenate(uc))),
+                             shape=(2 * K * T, nv)).tocsr()
+    b_ub = np.concatenate([np.tile(-Ns[w], 2) for w in range(K)])
+
+    lo = np.zeros(nv); hi = np.full(nv, np.inf)
+    hi[G0:G0 + T] = G_MAX
+    hi[C0:C0 + K * T] = P_MAX
+    hi[D0:D0 + K * T] = P_MAX
+    lo[S0:S0 + K * (T + 1)] = SOC_MIN
+    hi[S0:S0 + K * (T + 1)] = SOC_MAX
+    for w in range(K):
+        lo[S0 + w * (T + 1)] = soc_in; hi[S0 + w * (T + 1)] = soc_in
+        lo[S0 + w * (T + 1) + T] = soc_end; hi[S0 + w * (T + 1) + T] = soc_end
+
+    r = linprog(obj, A_eq=A_eq, b_eq=b_eq, A_ub=A_ub, b_ub=b_ub,
+                bounds=list(zip(lo, hi)), method="highs")
+    if not r.success:
+        return None
+    return r.x[G0:G0 + T]
+
+
+# ════════════════════════════════════════════════════════════════════════
 # 主循环：因果在线
 # ════════════════════════════════════════════════════════════════════════
 def run(lam, ndays=None, verbose=False):
@@ -785,14 +1113,27 @@ def run(lam, ndays=None, verbose=False):
                                          Ncor + wquantile(Rcor, PR[:len(Nh), a:b], TAUP))
 
         # ---- 计划 ĝ 与计划充放电 ----
+        # 计划层的价格系数：读法 B 用 0:00 能拿到的公布剖面；读法 A 用已知实际价。
+        # ⚠ 只在此处求值一次，两条计划路径（确定性 / 追索）共用同一个 pr_plan，
+        #   避免两处各写一遍 `PR[d] if READING=="A" else price_day` 而悄悄漂移。
+        pr_plan = PR[d] if READING == "A" else price_day
+
         def _solve(target):
-            """对给定目标解一次日前 LP，返回 (ĝ, c, d)。追负荷规则作兜底。"""
+            """对给定目标解一次日前 LP，返回 (ĝ, c, d)。追负荷规则作兜底。
+
+            REC=1 时走两阶段追索 LP（plan_day_recourse），只返回 ĝ —— 追索 c/d 无单一
+            实值，故 c/d 返回 None，执行层改走 exec_causal_day 因果落地。
+            REC=0 时退回确定性 plan_day（= 本文件旧行为），用于 A/B 对照。
+            """
             if PLAN == "lp":
-                # 计划层的价格系数：读法 B 用 0:00 能拿到的公布剖面；读法 A 用已知实际价。
-                # plan_day 本来就按 pr 参数化（v3 只是每代都传同一条 price_day）。
-                pl = plan_day(soc, target, PR[d] if READING == "A" else price_day, SOC0)
-                if pl is not None:
-                    return np.clip(pl[0], 0.0, G_MAX), pl[1], pl[2]
+                if REC:
+                    pl = plan_day_recourse(soc, _scenarios(d, target), pr_plan, SOC0)
+                    if pl is not None:
+                        return np.clip(pl, 0.0, G_MAX), None, None
+                else:
+                    pl = plan_day(soc, target, pr_plan, SOC0)
+                    if pl is not None:
+                        return np.clip(pl[0], 0.0, G_MAX), pl[1], pl[2]
             return np.clip(target, 0.0, G_MAX), None, None
 
         gh, c_pl, d_pl = _solve(Nt)           # 0:00 的计划 —— 结算违约/超额的基准
@@ -802,10 +1143,18 @@ def run(lam, ndays=None, verbose=False):
             n_adj += 1
         else:
             gd = gh
+        if REC:
+            # 口径 A 下调不省一分钱（推论1）⇒ 调整只允许上调。确定性 plan_day 对 Nt 单调，
+            # 自动满足 ĝ'≥ĝ；追索 LP 不再单调，须显式夹紧，否则调整会把部分槽的 ĝ 拉低、
+            # 产生本不该有的违约费。
+            gd = np.maximum(gd, gh)
         g_fin[d] = gd
 
         # ---- 执行 ----
-        if c_pl is not None and EXEC == "plan":
+        if REC:
+            # 追索版：计划层只输出 ĝ（c/d 无单一实值），执行用因果贪婪器落地
+            c_a, d_a, e_a, soc = exec_causal_day(d, gd, soc)
+        elif c_pl is not None and EXEC == "plan":
             c_a, d_a, e_a, soc = exec_plan(d, gd, c_pl, d_pl, soc)
         else:
             c_a, d_a, e_a, soc = exec_day(d, gd, lam, soc)
@@ -829,8 +1178,10 @@ def run(lam, ndays=None, verbose=False):
     em_fee = (5 * pr * e_f * DT)[w].sum()
     # 真实逐槽 SOC 轨迹：由充放电唯一确定（exec_plan 与 plan_day 共用同一递推，
     # 实测重建的日末值与 soc_tr 逐日相符到 0.000000 kWh）。
-    # ⚠ 报 SOC 区间**必须**用它。plan_day 把每日末端钉在 SOC0，日末序列只覆盖
-    #   [2830, 6000]，看上去像电池没在全幅循环 —— 实际日内打满 [1200, 10800]。
+    # ⚠ 报 SOC 区间**必须**用它。日末序列只覆盖 [5,118, 10,800]（实测，见
+    #   `代码/诊断/diag_p4_cross.py` 的「日界序列范围」一行）—— 那是**日界**范围，
+    #   不是日内范围；日内真实轨迹打满 [1,200, 10,800]（上下限都碰到、零越界）。
+    #   ⚠ 旧注释曾写日末覆盖 [2830, 6000]，那是**更早基线**的数，已作废。
     soc_full = np.concatenate([[SOC0], SOC0 + np.cumsum((ETA * c_f - d_f / ETA) * DT)])
     return dict(
         total=plan_fee + breach + excess + em_fee,
@@ -920,7 +1271,7 @@ def write_result4_3(r, out_path=None):
                      + (1.5 * p * np.maximum(gf - gh, 0)).sum()
                      + (5.0 * p * ed).sum())
 
-    out_path = out_path or os.path.join(BASE, "结果", "result4-3.xlsx")
+    out_path = out_path or os.environ.get("P4_OUT") or os.path.join(BASE, "结果", "result4-3.xlsx")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     wb = openpyxl.load_workbook(os.path.join(BASE, "附件", "附件5", "result4-3.xlsx"))
     # 计费窗口与 run() 结算用的 WIN 掩码严格同源，否则表内合计对不上 r["total"]。
@@ -984,10 +1335,39 @@ if __name__ == "__main__":
     print("=" * 118)
     print(f"问题 4（对应问题 3） · 口径 A · 波动电价   读法 {READING}   "
           f"电价加权分位 {'开' if WQ else '关'}   G_MAX={G_MAX:,.0f}")
+    print(f"  计划层充放电：{'追索变量（问题2两阶段）' if REC else '确定性 plan_day（旧行为）'}"
+          f"  执行器：{'exec_causal_day' if REC else 'exec_plan/exec_day'}")
     print(f"  计划分位 τ_块={TAU_B}  调整分位 τ'={TAUP}  调整通道={'开' if ADJ else '关'}  "
           f"最高可用档位 {BANDS}（0=0:00, 1=+6:00, 2=+12:00, 3=+18:00）")
     print(f"  天数 {NDAYS_RUN}  计费窗口第 {WIN0 + 1}–{NDAYS_RUN} 天  "
           f"MPC 重解间隔 {MPC_RES} 槽  时域 {H_MAX}")
+    print(f"  价格源 {PRICE_SRC}  价格缩放 {PSCALE:g}  回看窗口 {GRP_SPAN} 天"
+          f"  L_base 分组 {{{', '.join(str(k) for k in sorted(GRP_DOWS))}}}")
+    if is_delivery():
+        print("  ⇒ ✅ 本配置 = 交付配置（追索 + G 无上界 + τ=%s + 读法B）。"
+              % ",".join("%g" % x for x in _DELIVERY["taub"]))
+    elif is_sync_check():
+        print("  ⇒ 🔁 本配置 = 交付配置的**常数价回归模式**（价格源 att1，"
+              "τ=与问题 3 共享的 %s）。"
+              % ",".join("%g" % x for x in _SHARED_TAU["taub"]))
+        print("     跑出来的数**不是交付值**，而是用来核对与问题 3 是否同源。")
+    else:
+        print("  ⇒ ⚠⚠ 本配置 ≠ 交付配置，跑出来的数**不是交付值**，勿对外引用。")
+        print("     本跑实际旋钮：" + "  ".join(delivery_knobs()))
+        # ⚠ 这两行原本是**手抄的字面量**，换 τ 之后它会继续印旧 τ —— 一份会撒谎的提示。
+        #   改成从 _DELIVERY 生成，使"报出去的那个数"与"判据用的那个数"必然是同一个。
+        _kn = ["P4_REC=1", "P4_GMAX=%g" % _DELIVERY["gmax"],
+               "P4_TAUB=" + ",".join("%g" % x for x in _DELIVERY["taub"]),
+               "P4_TAUP=%g" % _DELIVERY["taup"],
+               "P4_READING=%s" % _DELIVERY["reading"], "P4_WQ=0", "P4_PSCALE=1",
+               "P4_PRICE_SRC=%s" % _DELIVERY["price_src"],
+               "P4_ANCHOR=%s" % _DELIVERY["anchor"],
+               "P4_LEVEL=1", "P4_BANDS=%d" % _DELIVERY["bands"],
+               "P4_GSPAN=%d" % _DELIVERY["span"], "P4_ADJ=1",
+               "P4_LAMS=%g" % _DELIVERY["lams"][0],
+               "P4_PLAN=%s" % _DELIVERY["plan"], "P4_EXEC=%s" % _DELIVERY["exec_"]]
+        print("     交付配置： " + " ".join(_kn))
+        print("       （≡ python 代码/run_problem4.py）")
     print("=" * 118)
     t0 = time.time()
 
@@ -1041,6 +1421,57 @@ if __name__ == "__main__":
             print(f"    ⚠ 违约费 {b['breach']:,.0f} 元 ≠ 0 —— 与口径 A 的推论(1)矛盾，须查。")
         else:
             print("    ✓ 违约费 ≈ 0，与口径 A 推论(1)（最优 g ≥ ĝ）一致。")
+
+        # ---- 失同步自检：常数价回归 + 交付配置 ⟹ 必须精确复现问题 3 的交付值 ----
+        # 本文件是 problem3_recourse.py 的姊妹版，两者只在**价格如何进入**上分岔。
+        # 把价格退回附件1（P4_PRICE_SRC=att1）后，两者应当给出**同一个总费** —— 这就是
+        # "两条交付物同源"的判据。问题 3 换了基准而本文件没跟上时，这里会硬报错，
+        # 而不是让一个陈旧的 4-3 数静默地留在归档里（2026-09-12 已经踩过一次，见 §6）
+        if is_sync_check():
+            tot = b["total"]
+            if abs(tot - P3_DELIVERY_TOTAL) > 1.0:
+                print()
+                print("!" * 118)
+                print(f"  ❌ 失同步自检**未通过**：常数价回归应精确复现问题 3 的交付值，"
+                      f"实得 {tot:,.2f} 元。")
+                print(f"     期望 {P3_DELIVERY_TOTAL:,.2f} 元   ｜   差 {tot - P3_DELIVERY_TOTAL:+,.2f} 元")
+                print("     ⟹ 问题 3 大概率又换了基准，而本文件没跟上。请检查：")
+                print("        ① 计划层是否与 problem3_recourse.py 同构（REC / _scenarios / plan_day_recourse）")
+                print("        ② G_MAX 读法、τ 取值是否与问题 3 交付配置一致")
+                print("        ③ 若问题 3 确已再次定稿，请同步更新 P3_DELIVERY_TOTAL")
+                print("     在修好之前，**不要**把本文件产出的数写进归档或论文。")
+                print("!" * 118)
+                raise SystemExit(1)
+            print(f"    ✅ 失同步自检通过：常数价回归精确复现问题 3 交付值 "
+                  f"{tot:,.2f} 元（两条交付物同源）。")
+
+        # ---- 交付值自检：本跑就是交付配置 ⟹ 总费必须等于 `_DELIVERY["total"]` ----
+        # 与上面那条失同步自检**方向相反**：那条防"问题 3 变了、我没跟上"，
+        # 这条防"我自己的交付值变了、下游没跟上"（`_p4_delivery` / 各诊断脚本 /
+        # 归档文档都引用同一个数）。少了它，改 τ 之后 14,257,306.50 会作为"交付值"
+        # 继续活在六七个文件里，而每个文件看上去都自洽。
+        if is_delivery():
+            tot = b["total"]
+            want = _DELIVERY["total"]
+            if abs(tot - want) > 1.0:
+                print()
+                print("!" * 118)
+                print(f"  ❌ 交付值自检**未通过**：本跑是交付配置，但总费 {tot:,.2f} 元 "
+                      f"≠ 声明的交付值 {want:,.2f} 元（差 {tot - want:+,.2f}）。")
+                print(f"     当前配置 τ={','.join('%g' % x for x in _DELIVERY['taub'])}/"
+                      f"{_DELIVERY['taup']:g}")
+                print("     ⟹ 两件事之一：① 求解器/数据变了（先查这个）；"
+                      "② τ 确实换了，则须同步：")
+                print("        · `problem4_3._DELIVERY['total']`（本行）")
+                print("        · `结果/result4-3.xlsx`（python 代码/run_problem4.py）")
+                print("        · 归档文档里所有引用交付值的表")
+                print("     在同步之前，**不要**把本文件产出的数写进归档或论文。")
+                print("!" * 118)
+                raise SystemExit(1)
+            print(f"    ✅ 交付值自检通过：{tot:,.2f} 元 = 声明的交付值。")
+
         if DO_WRITE:
             write_result4_3(b)
+        else:
+            print("  P4_WRITE=0 或 P4_NOWRITE=1：跳过写盘（交付文件未改动）。")
     print(f"  [总计时] {(time.time() - t0) / 60:.1f} min")

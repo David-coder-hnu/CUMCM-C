@@ -211,10 +211,36 @@ REC = bool(int(os.environ.get("P3_REC", 1)))
 # ── 交付配置自检：跑之前先告诉使用者"这一跑算不算交付值" ──────────────────
 # 旋钮一多，"跑了个非交付配置却以为拿到交付值"是最容易踩的坑（taskrun §6.5）。
 _DELIVERY = dict(rec=True, gmax=20000.0, taub=[0.55, 0.42, 0.42, 0.42], taup=0.42,
-                 span=7, level=True, bands=3, hsrc="all")
-_IS_DELIVERY = (REC == _DELIVERY["rec"] and abs(G_MAX - _DELIVERY["gmax"]) < 1e-9
-                and [round(x, 6) for x in TAU_B] == _DELIVERY["taub"]
-                and abs(TAUP - _DELIVERY["taup"]) < 1e-9)
+                 span=7, level=True, bands=3, hsrc="all", anchor="prev")
+
+
+def is_delivery():
+    """本跑是否**逐项**等于交付配置。
+
+    ⚠ 必须是函数、且在**调用时**求值，不能写成模块级的 `_IS_DELIVERY = (...)`：
+      `GRP_SPAN`（§3）、`H_SRC`（§3）、`ANCHOR`（数据段）都在本行**之后**才绑定，
+      在模块级引用它们会直接 `NameError`。
+    ⚠ 逐项核对**全部**交付旋钮，一项都不能漏。早期版本只比 rec/gmax/τ，于是
+      `P3_ANCHOR=next`（含 10 分钟前视）、`P3_HSRC=group`、`P3_GSPAN=6`、`P3_LEVEL=0`、
+      `P3_BANDS=1` 全都会**照样打印「= 交付配置」** —— 自检在说谎，而它存在的唯一理由
+      就是不说谎。最刺眼的一例：`P3_ANCHOR=next` 正是去前视 A/B 的对照旋钮，把它标成
+      "交付配置"等于把刚修掉的前视又认成交付值。
+    ⚠ 新增旋钮时必须同步加进这里 —— 否则自检静默失效，且**失效方向是"假通过"**。
+    """
+    return (REC == _DELIVERY["rec"] and abs(G_MAX - _DELIVERY["gmax"]) < 1e-9
+            and [round(x, 6) for x in TAU_B] == _DELIVERY["taub"]
+            and abs(TAUP - _DELIVERY["taup"]) < 1e-9
+            and GRP_SPAN == _DELIVERY["span"] and LEVEL == _DELIVERY["level"]
+            and BANDS == _DELIVERY["bands"] and H_SRC == _DELIVERY["hsrc"]
+            and ANCHOR == _DELIVERY["anchor"])
+
+
+def delivery_knobs():
+    """把上面每一项的**当前值**列出来 —— 自检说"≠ 交付"时，得让人一眼看出是哪一项。"""
+    return [f"P3_REC={int(REC)}", f"P3_GMAX={G_MAX:g}",
+            "P3_TAUB=" + ",".join(f"{x:g}" for x in TAU_B), f"P3_TAUP={TAUP:g}",
+            f"P3_GSPAN={GRP_SPAN}", f"P3_LEVEL={int(LEVEL)}", f"P3_BANDS={BANDS}",
+            f"P3_HSRC={H_SRC}", f"P3_ANCHOR={ANCHOR}"]
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -232,6 +258,22 @@ fc3 = pd.read_excel(os.path.join(BASE, "附件", "附件3.xlsx"), header=None) \
 actual_net = load - pv
 price = np.tile(price_day, NDAYS)
 
+# ── 光伏预报：附件 3 是【整点】预报，而模型要的是【144 槽】────────────────────
+# 题面（C题.md:54）与附件 3 的列头（预报1小时…预报24小时）都写明：每天 4 档、每档
+# 给出**未来 24 小时整点**的光伏功率，一天只有 4×24 个数。而决策分辨率是 144 槽/天
+# （附件 1/2 均为 10 分钟区间）⇒ **必须补一条「逐小时 → 144 槽」的还原约定**。
+#
+# 本脚本用**线性插值**，锚点在**槽的结束时刻**（与附件 1/2 的右端点标号约定自洽）。
+# 这不是可有可无的装饰，是实测择优的结果：把整点真值当作"完美逐小时预报"，用四种
+# 常见约定还原到 144 槽、再与真实 10min 序列比对（全年，只算有光照的槽）——
+#     线性插值·锚槽末（本脚本）        RMSE 163.6 kW   ← 采用
+#     线性插值·锚槽中                 RMSE 201.0 kW
+#     阶梯（零阶保持）·槽结束于整点     RMSE 717.1 kW
+#     阶梯·槽起始于整点                RMSE 911.3 kW   ← 不做插值会带进 4–6 倍误差
+# 四种约定的**全年电量完全相同**（权重行和为 1，插值只重分配、不增删电量），所以它
+# 不会在总量上给模型送分。另一项独立佐证：整点预报对「结束于该整点的槽」的
+# MAE = 242.8 kW，明显优于对「起始于该整点的槽」的 352.5 kW。
+# 证据脚本：代码/诊断/diag_p3_hourly.py（复现上面两行）。
 Wm = np.zeros((N, 25))
 for k in range(N):
     t = (k + 1) / 6.0
@@ -241,16 +283,26 @@ for k in range(N):
     else:
         Wm[k, lo] = 1.0 - (t - lo); Wm[k, hi] = t - lo
 
+# 发布时刻那一根锚点 H[S] 取哪个槽：
+#   "prev"（缺省，**严格因果**）= pv[d, 6S−1]，发布时刻 S:00 **已观测完**的最后一个 10min 槽；
+#   "next"（旧行为，**含 10 分钟前视**）= pv[d, 6S]，发布时刻 **之后**那 10min 的实测。
+# 旧行为让调整层对窗口头 5 槽（6S..6S+4，线性插值权重 5/6,4/6,3/6,2/6,1/6）拿到比合法
+# 可得更好的预报，方向偏乐观。实测前视量（10 分钟爬坡）均值 111–158 kW，经权重衰减后
+# 落到那 5 槽上的偏差均值 46–66 kW、最大 470 kW（12:00 档最大，正值光伏峰值附近）。
+# 第 0 块永不受影响（不在任何调整窗口内）。P3_ANCHOR=next 保留用于 A/B 归档。
+ANCHOR = os.environ.get("P3_ANCHOR", "prev")
+
 
 def pv_fc(d, s):
     """第 d 天第 s 档（0/6/12/18 时发布）预报的当日 144 槽光伏。
 
     `预报k小时` = 发布后第 k 小时 ⇒ H[h] = fc3[d,s,h−s_hour−1]，h ≥ s_hour+1。
     跨到次日的部分被更晚发布的同目标档位支配，丢弃无损（实测见 §3）。
+    锚点 H[S] 取发布时刻**已观测完**的槽，见上面 ANCHOR 的说明。
     """
     H = np.zeros(25)
     if S_HOUR[s] > 0:
-        H[S_HOUR[s]] = pv[d, 6 * S_HOUR[s]]
+        H[S_HOUR[s]] = pv[d, 6 * S_HOUR[s] - (1 if ANCHOR == "prev" else 0)]
     for h in range(S_HOUR[s] + 1, 25):
         H[h] = fc3[d, s, h - S_HOUR[s] - 1]
     return H @ Wm.T
@@ -1069,11 +1121,13 @@ if __name__ == "__main__":
     else:
         print(f"  L_base 口径：同星期几 K={K_PEERS} 均值（未启用分组）")
     print(f"  残差分位取样：{'同组（实测有害，仅作对照）' if H_SRC == 'group' else '全部历史日池化'}")
-    if _IS_DELIVERY:
-        print("  ⇒ ✅ 本配置 = 交付配置，产出值即 结果/result3.xlsx 的 13,630,568 元。")
+    if is_delivery():
+        print("  ⇒ ✅ 本配置 = 交付配置，产出值即 结果/result3.xlsx 的 13,641,420 元。")
     else:
         print("  ⇒ ⚠⚠ 本配置 ≠ 交付配置，跑出来的数**不是交付值**，勿对外引用。")
+        print("     本跑实际旋钮：" + "  ".join(delivery_knobs()))
         print("     交付配置： P3_REC=1 P3_GMAX=20000 P3_TAUB=0.55,0.42,0.42,0.42 P3_TAUP=0.42"
+              " P3_GSPAN=7 P3_LEVEL=1 P3_BANDS=3 P3_HSRC=all P3_ANCHOR=prev"
               "   （≡ python 代码/run_problem3.py）")
     print("=" * 118)
     t0 = time.time()
