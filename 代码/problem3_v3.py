@@ -188,6 +188,20 @@ fc3 = pd.read_excel(os.path.join(BASE, "附件", "附件3.xlsx"), header=None) \
 actual_net = load - pv
 price = np.tile(price_day, NDAYS)
 
+# ── 光伏预报：附件 3 是【整点】预报，而模型要的是【144 槽】────────────────────
+# 题面（C题.md:54）与附件 3 的列头（预报1小时…预报24小时）都写明：每天 4 档、每档
+# 给出**未来 24 小时整点**的光伏功率，一天只有 4×24 个数。而决策分辨率是 144 槽/天
+# （附件 1/2 均为 10 分钟区间）⇒ **必须补一条「逐小时 → 144 槽」的还原约定**。
+#
+# 本脚本用**线性插值**，锚点在**槽的结束时刻**（与附件 1/2 的右端点标号约定自洽）。
+# 这不是可有可无的装饰，是实测择优的结果：把整点真值当作"完美逐小时预报"，用四种
+# 常见约定还原到 144 槽、再与真实 10min 序列比对（全年，只算有光照的槽）——
+#     线性插值·锚槽末（本脚本）        RMSE 163.6 kW   ← 采用
+#     线性插值·锚槽中                 RMSE 201.0 kW
+#     阶梯（零阶保持）·槽结束于整点     RMSE 717.1 kW
+#     阶梯·槽起始于整点                RMSE 911.3 kW   ← 不做插值会带进 4–6 倍误差
+# 四种约定的**全年电量完全相同**（权重行和为 1，插值只重分配、不增删电量）。
+# 证据脚本：代码/诊断/diag_p3_hourly.py（本文件与 problem3_recourse.py 共用同一套约定）。
 Wm = np.zeros((N, 25))
 for k in range(N):
     t = (k + 1) / 6.0
@@ -197,16 +211,23 @@ for k in range(N):
     else:
         Wm[k, lo] = 1.0 - (t - lo); Wm[k, hi] = t - lo
 
+# 发布时刻那一根锚点 H[S] 取哪个槽：
+#   "prev"（缺省，**严格因果**）= pv[d, 6S−1]，发布时刻 S:00 **已观测完**的最后一个 10min 槽；
+#   "next"（旧行为，**含 10 分钟前视**）= pv[d, 6S]，发布时刻 **之后**那 10min 的实测。
+# 见 problem3_recourse.py 同名参数的说明与 代码/诊断/diag_p3_hourly.py 的实测。
+ANCHOR = os.environ.get("P3_ANCHOR", "prev")
+
 
 def pv_fc(d, s):
     """第 d 天第 s 档（0/6/12/18 时发布）预报的当日 144 槽光伏。
 
     `预报k小时` = 发布后第 k 小时 ⇒ H[h] = fc3[d,s,h−s_hour−1]，h ≥ s_hour+1。
     跨到次日的部分被更晚发布的同目标档位支配，丢弃无损（实测见 §3）。
+    锚点 H[S] 取发布时刻**已观测完**的槽，见上面 ANCHOR 的说明。
     """
     H = np.zeros(25)
     if S_HOUR[s] > 0:
-        H[S_HOUR[s]] = pv[d, 6 * S_HOUR[s]]
+        H[S_HOUR[s]] = pv[d, 6 * S_HOUR[s] - (1 if ANCHOR == "prev" else 0)]
     for h in range(S_HOUR[s] + 1, 25):
         H[h] = fc3[d, s, h - S_HOUR[s] - 1]
     return H @ Wm.T
