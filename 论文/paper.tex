@@ -662,16 +662,18 @@ $\eta-1/\eta=-0.19<0$，纯属亏能量，最优解中不会出现。弃光量�
 
 \subsubsection{结果分析与检验}
 
-图 \ref{fig:q1day} 给出全天电价、负载、光伏与计划购电量的对照。表 \ref{tab:q1t2}
-只列出 6 个 4 小时块的充放电聚合量与两个储电量锚点，看不出充放电发生在什么时刻，
-故图 \ref{fig:q1day}(b) 进一步给出储电量的时序轨迹与电价背景的对应关系。
+图 \ref{fig:q1day} 按\emph{电价 $\to$ 充放电 $\to$ 储电量}的顺序给出全天决策链：
+(a) 全天电价，(b) 负载、光伏与计划购电量（统一 kW 单轴），(c) 充放电功率，
+(d) 储电量轨迹；充放电窗口以底带在四个面板上对齐，竖直方向即可读出「电价低的
+时段充电、电价高的时段放电」。表 \ref{tab:q1t2} 只列出 6 个 4 小时块的聚合量与
+两个储电量锚点，看不出充放电发生在什么时刻，故 (c)(d) 按 10 分钟粒度给出逐槽轨迹。
 
 \begin{figure}[!htbp]
   \centering
-  \includegraphics[width=0.64\textwidth]{figures/fig_q1_day.png}\\[3pt]
-  \includegraphics[width=0.66\textwidth]{figures/fig_q1_soc.png}
-  \caption{问题一：(a) 全天电价、负载、光伏与计划购电量；(b) 分块充放电功率与
-  储电量轨迹}
+  \includegraphics[width=0.80\textwidth]{figures/fig_q1_chain.png}
+  \caption{问题一的全天决策链：(a) 全天电价；(b) 负载、光伏与计划购电量；
+  (c) 充放电功率（10 分钟粒度）；(d) 储电量轨迹。(c)(d) 的逐槽充放与储电量由
+  问题一 LP 重解得到，其 6 个 4 小时块汇总与交付文件 \texttt{result1.xlsx} 逐块一致。}
   \label{fig:q1day}
 \end{figure}
 

@@ -98,114 +98,166 @@ def read_daily(path, sheet=None, ncol=145):
     return np.array(rows, float)
 
 
-# ============================================ 图：问题一 全天曲线（面板 (a)(b)）
-def fig_q1_day():
-    price, load, pv = read_att1()
-    ws = openpyxl.load_workbook(os.path.join(ROOT, "结果", "result1.xlsx"),
-                                data_only=True)["计划购电量"]
-    g1 = np.array([ws.cell(r, 2).value or 0.0 for r in range(2, 146)], float)
-    h = hours()
-
-    fig, ax = plt.subplots(2, 1, figsize=(8.0, 5.6), sharex=True,
-                           gridspec_kw={"height_ratios": [1, 1.35]},
-                           layout="constrained")
-    ax[0].plot(h, price, color=C_PRICE, lw=1.7)
-    ax[0].fill_between(h, price, alpha=0.10, color=C_PRICE)
-    ax[0].set_ylabel("电价 / (元·kWh$^{-1}$)")
-    sub(ax[0], "(a) 全天电价（0.3713～1.3952 元/kWh）")
-
-    axb = ax[1].twinx()
-    axb.bar(h - 1 / 12.0, g1, width=1 / 6.0, color=C_BUY, alpha=0.38, lw=0,
-            label="计划购电量 $\\hat g_t$（右轴）")
-    axb.set_ylabel("购电量 / (kWh·10min$^{-1}$)")   # 不用彩色：右轴标签与刻度保持黑色
-    axb.tick_params(axis="y", labelsize=9)
-    axb.grid(False)
-
-    ax[1].plot(h, load, color=C_LOAD, lw=1.7, label="小区负载 $L_t$（左轴）")
-    ax[1].plot(h, pv, color=C_PV, lw=1.7, label="光伏发电 $P_t$（左轴）")
-    ax[1].set_ylabel("功率 / kW")
-    ax[1].set_xlabel("时刻 / h")
-    ax[1].set_xlim(0, 24)
-    ax[1].set_xticks(np.arange(0, 25, 3))
-    sub(ax[1], "(b) 负载、光伏与计划购电量")
-    # 图例放到画布底部：原先压在图内会盖住光伏峰值与购电量柱
-    h1, l1 = ax[1].get_legend_handles_labels()
-    h2, l2 = axb.get_legend_handles_labels()
-    fig.legend(h1 + h2, l1 + l2, fontsize=9, ncol=3, frameon=False,
-               loc="outside lower center")
-    fig.savefig(os.path.join(OUT, "fig_q1_day.png"))
-    plt.close(fig)
+# ============================ 图：问题一 全天决策链（四面板，10 分钟粒度）
+def _runs(mask, dt=1.0 / 6.0):
+    """把布尔掩码折成若干连续时间区间 [(起, 止)]（小时，按区间右端点口径）。"""
+    out, t, n = [], 0, len(mask)
+    while t < n:
+        if mask[t]:
+            a = t
+            while t + 1 < n and mask[t + 1]:
+                t += 1
+            out.append((a * dt, (t + 1) * dt))
+        t += 1
+    return out
 
 
-# ==================================== 图：问题一 储电量轨迹（单面板，无标题）
-def fig_q1_soc():
+def solve_q1(price, load, pv):
+    """只读重解问题一 LP（与 代码/problem1.py 同一模型、同一参数）。
+
+    result1.xlsx 是照附件 5 模板出的最小交付，只落盘 6 个 4 小时块的充放量汇总，
+    10 分钟粒度的 c_t/d_t/SOC_t 是 LP 内部变量、没有落盘；要画逐槽轨迹必须重解。
+    重解结果由 verify_q1() 逐块对照交付文件，对不上就中断——图上不出现未校验的数。
+    """
+    from scipy.optimize import linprog
+
+    N, DT, ETA = 144, 1.0 / 6.0, 0.9
+    P_MAX, SOC_MIN, SOC_MAX, SOC0 = 5000.0, 1200.0, 10800.0, 6000.0
+    G0, C0, D0, S0, O0 = 0, N, 2 * N, 3 * N, 4 * N
+    n = 4 * N + N + 1
+
+    c_obj = np.zeros(n)
+    c_obj[G0:G0 + N] = price
+
+    A_eq = np.zeros((2 * N, n))
+    b_eq = np.zeros(2 * N)
+    for t in range(N):
+        A_eq[t, G0 + t] = 1.0
+        A_eq[t, C0 + t] = -1.0
+        A_eq[t, D0 + t] = 1.0
+        A_eq[t, S0 + t] = -1.0
+        b_eq[t] = load[t] - pv[t]
+        r = N + t
+        A_eq[r, O0 + t + 1] = 1.0
+        A_eq[r, O0 + t] = -1.0
+        A_eq[r, C0 + t] = -ETA * DT
+        A_eq[r, D0 + t] = DT / ETA
+
+    bounds = ([(0.0, None)] * N + [(0.0, P_MAX)] * N + [(0.0, P_MAX)] * N
+              + [(0.0, None)] * N
+              + [(SOC0, SOC0)] + [(SOC_MIN, SOC_MAX)] * (N - 1) + [(SOC0, SOC0)])
+
+    res = linprog(c_obj, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method="highs")
+    assert res.success, "问题一 LP 重解失败：%s" % res.message
+    x = res.x
+    return (x[G0:G0 + N], x[C0:C0 + N], x[D0:D0 + N], x[S0:S0 + N],
+            x[O0:O0 + N + 1])
+
+
+def verify_q1(c, d, soc):
+    """用交付文件 result1.xlsx 的 6 块汇总与首末储电量反查重解结果。"""
     ws = openpyxl.load_workbook(os.path.join(ROOT, "结果", "result1.xlsx"),
                                 data_only=True)["充放电量"]
-    chg, dis, soc0 = [], [], None
-    for r in range(1, ws.max_row + 1):
-        lab = ws.cell(r, 1).value
-        if lab in BLOCKS:
-            chg.append(ws.cell(r, 2).value or 0.0)
-            dis.append(ws.cell(r, 3).value or 0.0)
-        if ws.cell(r, 4).value == "0:00":
-            soc0 = ws.cell(r, 5).value
-    assert soc0 is not None, "未读到 0:00 储电量"
-    chg, dis = np.array(chg, float), np.array(dis, float)
-    soc = [soc0]
-    for c, d in zip(chg, dis):
-        soc.append(soc[-1] + 0.9 * c - d / 0.9)
-    soc = np.array(soc)
-    xs = np.arange(0, 25, 4, dtype=float)
-    price, _, _ = read_att1()
-    hp = hours()
+    DT = 1.0 / 6.0
+    for j in range(6):
+        r = j + 2
+        exp_c = ws.cell(r, 2).value or 0.0
+        exp_d = ws.cell(r, 3).value or 0.0
+        got_c = c[j * 24:(j + 1) * 24].sum() * DT
+        got_d = d[j * 24:(j + 1) * 24].sum() * DT
+        assert abs(got_c - exp_c) < 5e-4 and abs(got_d - exp_d) < 5e-4, (
+            "第 %d 块与交付文件不符：充电 %.4f(重解)/%.4f(交付)，"
+            "放电 %.4f/%.4f" % (j + 1, got_c, exp_c, got_d, exp_d))
+    assert abs(soc[0] - 6000.0) < 1e-6 and abs(soc[-1] - 6000.0) < 1e-6, \
+        "首末储电量不为 6000 kWh"
 
-    fig, ax = plt.subplots(2, 1, figsize=(7.8, 5.4), sharex=True,
-                           gridspec_kw={"height_ratios": [1, 1.15]},
+
+def fig_q1_chain():
+    """问题一的全天决策链：电价 -> 充放电 -> 储电量。
+
+    四个面板共享时间轴、统一用 kW / kWh（不再左右双轴换算）；充放电窗口以底带
+    贯穿全图，竖直方向即可把「电价低 → 充电 → 储电量升」这条链对上。
+    """
+    price, load, pv = read_att1()
+    g, c, d, s, soc = solve_q1(price, load, pv)
+    verify_q1(c, d, soc)
+
+    h = hours()                        # 区间右端点 1/6 .. 24
+    hs = np.concatenate([[0.0], h])    # 储电量的 145 个时点
+    chg_win, dis_win = _runs(c > 1e-6), _runs(d > 1e-6)
+
+    fig, ax = plt.subplots(4, 1, figsize=(8.8, 6.9), sharex=True,
+                           gridspec_kw={"height_ratios": [1.0, 1.0, 0.95, 1.05]},
                            layout="constrained")
-    # 面板 (a)：分块充放电功率（按块平均功率），叠加电价背景
-    axp0 = ax[0].twinx()
-    axp0.fill_between(hp, price, color=C_PRICE, alpha=0.16, lw=0)
-    axp0.set_ylabel("电价 / (元·kWh$^{-1}$)", fontsize=9)
-    axp0.tick_params(axis="y", labelsize=8.5)
-    axp0.grid(False)
-    xb = np.array([2, 6, 10, 14, 18, 22], float)
-    ax[0].bar(xb - 0.85, chg / 4.0, 1.7, color=C_BUY, label="充电功率（块平均）")
-    ax[0].bar(xb + 0.85, dis / 4.0, 1.7, color=C_EMG, label="放电功率（块平均）")
-    ax[0].set_ylabel("功率 / kW")
-    ax[0].legend(fontsize=8.5, ncol=2, loc="upper left")
-    sub(ax[0], "(a) 分块充放电功率与电价")
 
-    ax = ax[1]
-    axp = ax.twinx()
-    axp.fill_between(hp, price, color=C_PRICE, alpha=0.16, lw=0)
-    axp.set_ylabel("电价 / (元·kWh$^{-1}$)", fontsize=9)
-    axp.tick_params(axis="y", labelsize=8.5)
-    axp.grid(False)
+    def bands(a):
+        for x0, x1 in chg_win:
+            a.axvspan(x0, x1, color=C_BUY, alpha=0.13, lw=0, zorder=0)
+        for x0, x1 in dis_win:
+            a.axvspan(x0, x1, color=C_EMG, alpha=0.11, lw=0, zorder=0)
 
-    ax.axhspan(1200, 10800, color=C_SOC, alpha=0.06, lw=0)
-    ax.plot(xs, soc, "-o", color=C_SOC, lw=2.2, ms=6.5, zorder=5,
-            label="储电量轨迹（分块边界）")
-    ax.axhline(10800, color="#888", ls=":", lw=1)
-    ax.axhline(1200, color="#888", ls=":", lw=1)
-    ax.text(0.2, 10800, " 上限 10800", va="bottom", fontsize=8.5, color="#555")
-    ax.text(0.2, 1200, " 下限 1200", va="bottom", fontsize=8.5, color="#555")
-    ax.annotate("0:00-4:00 低价充电", xy=(4, soc[1]), xytext=(5.6, 11200),
-                fontsize=9, color="#333",
-                arrowprops=dict(arrowstyle="->", color="#666", lw=1.0))
-    ax.annotate("16:00-20:00 高价放电", xy=(20, soc[5]), xytext=(12.2, 2100),
-                fontsize=9, color="#333",
-                arrowprops=dict(arrowstyle="->", color="#666", lw=1.0))
-    ax.set_xlabel("时刻 / h")
-    ax.set_ylabel("储电量 / kWh")
-    ax.set_xlim(0, 24)
-    ax.set_ylim(0, 12200)
-    ax.set_xticks(xs)
-    ax.set_xticklabels(["0:00", "4:00", "8:00", "12:00", "16:00", "20:00", "24:00"],
-                       fontsize=9)
-    ax.legend(fontsize=9, loc="upper right", framealpha=0.95)
-    sub(ax, "(b) 储电量轨迹")
-    fig.savefig(os.path.join(OUT, "fig_q1_soc.png"))
+    # ---------- (a) 电价
+    bands(ax[0])
+    ax[0].plot(h, price, color=C_PRICE, lw=1.6)
+    ax[0].fill_between(h, price, color=C_PRICE, alpha=0.08, lw=0)
+    ax[0].set_ylim(0, 1.52)
+    ax[0].set_ylabel("电价\n/(元·kWh$^{-1}$)", fontsize=9)
+    sub(ax[0], "(a) 全天电价（绿/红底带 = 储能充电/放电窗口）")
+
+    # ---------- (b) 负载、光伏与计划购电量（同为 kW，单轴）
+    bands(ax[1])
+    ax[1].plot(h, load, color=C_LOAD, lw=1.6, label="小区负载 $L_t$")
+    ax[1].plot(h, pv, color=C_PV, lw=1.6, label="光伏发电 $P_t$")
+    ax[1].plot(h, g, color=C_BUY, lw=1.4, ls="--", label="计划购电量 $\\hat g_t$")
+    ax[1].set_ylabel("功率 / kW", fontsize=9)
+    ax[1].set_ylim(0, 1.32 * max(load.max(), pv.max(), g.max()))
+    ax[1].legend(fontsize=8.5, ncol=3, loc="upper left", framealpha=0.9)
+    sub(ax[1], "(b) 负载、光伏与计划购电量（统一 kW 单轴）")
+
+    # ---------- (c) 充放电蝶形，10 分钟阶梯
+    bands(ax[2])
+    ax[2].fill_between(h, 0, c, step="post", color=C_BUY, alpha=0.9, lw=0,
+                       label="充电 $c_t$（向上）")
+    ax[2].fill_between(h, 0, -d, step="post", color=C_EMG, alpha=0.9, lw=0,
+                       label="放电 $d_t$（向下）")
+    ax[2].axhline(0, color="#555", lw=0.9)
+    ax[2].set_ylim(-1.45 * d.max(), 1.45 * max(c.max(), 1.0))
+    ax[2].set_ylabel("功率 / kW", fontsize=9)
+    ax[2].legend(fontsize=8.5, ncol=2, loc="upper left", framealpha=0.9)
+    ax[2].text(2.0, 0.55 * ax[2].get_ylim()[1], "0:00–4:00\n充电 4500.00 kWh",
+               fontsize=8.5, color="#1F4E36", ha="center", va="center")
+    ax[2].text(6.0, 0.62 * ax[2].get_ylim()[0], "4:00–8:00\n放电 6365.84 kWh",
+               fontsize=8.5, color="#7A1F28", ha="center", va="center")
+    ax[2].text(18.0, 0.62 * ax[2].get_ylim()[0], "16:00–20:00\n放电 5780.13 kWh",
+               fontsize=8.5, color="#7A1F28", ha="center", va="center")
+    sub(ax[2], "(c) 充放电功率（10 分钟粒度，非 4 小时块平均）")
+
+    # ---------- (d) 储电量轨迹，10 分钟粒度
+    bands(ax[3])
+    ax[3].axhspan(1200, 10800, color=C_SOC, alpha=0.05, lw=0)
+    ax[3].plot(hs, soc, color=C_SOC, lw=1.8, label="储电量 $SOC_t$")
+    # 首末锚点：0:00 与 24:00 均为 6000 kWh。标出水平线与两个端点，
+    # 免得读者在曲线上找；文字靠右端内侧，避开上升段。
+    ax[3].axhline(6000, color="#8A7FA8", ls="-.", lw=0.9, alpha=0.85, zorder=1)
+    ax[3].plot([0, 24], [6000, 6000], "o", color=C_SOC, ms=6, zorder=6,
+               mfc="white", mew=1.6)
+    ax[3].text(23.85, 6000, "首末锚点 6000 ", va="bottom", ha="right",
+               fontsize=8.2, color="#4C3F73")
+    ax[3].axhline(10800, color="#888", ls=":", lw=1)
+    ax[3].axhline(1200, color="#888", ls=":", lw=1)
+    ax[3].text(0.15, 10800, " 上限 10800", va="bottom", fontsize=8.2, color="#555")
+    ax[3].text(0.15, 1200, " 下限 1200", va="bottom", fontsize=8.2, color="#555")
+    ax[3].set_ylim(0, 12600)
+    ax[3].set_ylabel("储电量 / kWh", fontsize=9)
+    ax[3].legend(fontsize=8.5, loc="upper right", framealpha=0.9)
+    ax[3].set_xlim(0, 24)
+    ax[3].set_xticks(np.arange(0, 25, 3))
+    ax[3].set_xlabel("时刻 / h")
+    sub(ax[3], "(d) 储电量轨迹（10 分钟粒度，首末均为 6000 kWh）")
+
+    fig.savefig(os.path.join(OUT, "fig_q1_chain.png"))
     plt.close(fig)
+
 
 
 # ======================================== 图：问题二 全年轨迹（面板 (a)(b)）
@@ -785,7 +837,7 @@ def fig_q4_pscale():
 
 
 if __name__ == "__main__":
-    for fn in [fig_q1_day, fig_q1_soc, fig_q2_year, fig_q2_netheat,
+    for fn in [fig_q1_chain, fig_q2_year, fig_q2_netheat,
                fig_q4_priceheat, fig_tau,
                fig_q3_windows, fig_q3_ablation, fig_q3_rmse, fig_q4_price,
                fig_q4_bill, fig_q4_daily_bill, fig_q4_shift, fig_q4_pscale]:
