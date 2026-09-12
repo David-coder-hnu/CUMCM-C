@@ -12,7 +12,7 @@
   L3 独立重算：只用附件 1/2/4 + 表内数据重算「计划/违约/超额」三项，与 run() 对账
   L4 继承性核对：对 result3.xlsx 用同一把尺子量能量平衡缺口，证明它是 v3 继承性质
 
-用法：python 代码/诊断/diag_p4_audit.py     （主配置：读法 B、WQ=0、G≤5000）
+用法：python 代码/诊断/diag_p4_audit.py     （主配置：追索 + G 无上界 + 读法 B + WQ=0）
 """
 import os
 import sys
@@ -27,12 +27,31 @@ for _s in (sys.stdout, sys.stderr):
 
 BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(BASE, "代码"))
+sys.path.insert(0, os.path.join(BASE, "代码", "诊断"))
+import _p4_delivery as _D          # 交付配置的唯一真源（含 τ；见该模块说明）
+import _p4_env as E                # ★★ 进程内加载交付配置的**唯一正确姿势**
 
-os.environ.setdefault("P4_READING", "B")
-os.environ.setdefault("P4_WQ", "0")
-os.environ.setdefault("P4_GMAX", "5000")
-
-P = importlib.import_module("problem4_3")
+# ⚠⚠ 基准 = **交付配置**（追索 + G 无上界 + 交付 τ + 读法B + 去前视锚点），
+#   不是早期的"确定性 + G≤5000"。审计的对象是 结果/result4-3.xlsx，
+#   审计者就必须站在**产出那份文件的那个配置**上 —— 否则量的是另一份表。
+#
+# ⚠⚠⚠ 2026-09-12 抓到的**静默错配置**（本文件曾经就踩在上面）：
+#   旧写法是
+#       for _k, _v in _D.delivery()[0].items(): os.environ.setdefault(_k, _v)
+#       P = importlib.import_module("problem4_3")
+#   而 `_D.delivery()` **自己会 import 一次 `problem4_3`** 去读 `_DELIVERY`
+#   （`_p4_delivery.py:48`），那一次是在**调用时的环境**下执行的，模块对象随即被钉进
+#   `sys.modules`。于是后面 `os.environ` 再怎么改、`import_module` 拿回来的都是那份缓存
+#   —— **旋钮一个都没生效，而且不报任何错**。
+#   实测后果：本审计跑的是 `G_MAX=5000` 那一档（L1 报 14,712,028.78 而不是 14,257,306），
+#   却拿它去和 `result4-3.xlsx`（20000 档写的）逐槽比 ⇒ L2 全部爆表
+#   （`max|表内 ĝ − 内存 ĝ| = 9.181e+02`）、L3 差 −597,158 元。
+#   **唯一看得出不对的地方是标题行那个 `G_MAX=`，而它当时没人核对。**
+#
+#   ⇒ 正确姿势是 `_p4_env.load()`：**先写 env、再 `importlib.reload`**（见该模块 docstring）。
+#     它还会断言 `is_delivery()` —— 把"静默跑在别的配置上"变成一声脆响。
+#     τ 与全部旋钮都从 `problem4_3._DELIVERY` 读，**一个字都不手抄**。
+P = E.load()
 N, DT, ETA = P.N, P.DT, P.ETA
 OUT = []
 
@@ -114,10 +133,24 @@ if abs(bal) > 1.0:
         f"既未供负载也未进电池，")
     say(f"      在账本上是「买了但丢了」。真实微网里这等价于**弃光/弃风式削减**，"
         f"或干脆少买。")
-    say(f"      论文里必须声明；它同时说明 G_MAX=5,000 kW 这道自加上界在夜间是**紧的**：")
-    say(f"      max g = {float(gf[days].max() * DT):,.2f} kWh/槽 = "
-        f"{float(gf[days].max()):,.1f} kW（自加上限 {P.G_MAX:,.0f} kW，"
-        f"贴上限槽占比 {100 * (gf[days] >= P.G_MAX - 1e-6).mean():.2f}%）")
+    # ⚠ 这里原先把上界**写死**成 5,000（旧"确定性 + G≤5000"基准的残渣），同时又在下一行
+    #   用 `P.G_MAX` 插值（交付基准下 = 20,000）—— 同一句话里两个上界，自相矛盾。
+    #   而且**结论**也随基准反向：5,000 时夜间确实紧，20,000 时完全不紧。故：
+    #   · 上界取**当前跑的真实值**（`P.G_MAX`），不写死；
+    #   · "是否紧"由数据判定，不由文案断言 —— 贴上限槽占比为 0 时说"紧"就是在说谎。
+    _pk = float(gf[days].max())
+    _bind = 100 * (gf[days] >= P.G_MAX - 1e-6).mean()
+    say(f"      它是否由购电上界造成？max g = {_pk * DT:,.2f} kWh/槽 = {_pk:,.1f} kW，"
+        f"本轮上界 {P.G_MAX:,.0f} kW，")
+    if _bind < 1e-9:
+        say(f"      **贴上限槽占比 0.00% ⇒ 上界完全不紧，缺口不是上界造成的** ——"
+            f"即使放开购电，")
+        say(f"      这 {100 * float(dp_[days].sum()) / kg:.1f}% 的电量照样会被丢掉"
+            f"（问题 4 只换价不改量，更不会改变这一点）。")
+    else:
+        say(f"      贴上限槽占比 {_bind:.2f}% ⇒ **上界在夜间是紧的**，缺口有一部分可归因于上界。")
+    say(f"      ⚠ 上界本身随读法变（见 代码/诊断/diag_p4_2_gmax.py：`G≤5000` 那格峰值正好"
+        f"压在 5,000.0 kW 上，是紧的）。")
 
 say(f"\n  账本重算（内存 + 附件4 实际价，与 run 结算同源）：")
 say(f"    计划 p·ĝ {(P.PR.ravel() * gh.ravel() * DT)[wm].sum():>16,.2f}")
