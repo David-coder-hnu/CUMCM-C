@@ -202,7 +202,9 @@ def fig_q1_chain():
     ax[0].fill_between(h, price, color=C_PRICE, alpha=0.08, lw=0)
     ax[0].set_ylim(0, 1.52)
     ax[0].set_ylabel("电价\n/(元·kWh$^{-1}$)", fontsize=9)
-    sub(ax[0], "(a) 全天电价（绿/红底带 = 储能充电/放电窗口）")
+    # 面板标题只留编号与对象名；底带含义、粒度、锚点等一律移到 LaTeX 的 \caption，
+    # 免得标题又长又挤（多面板图的小标题只承担"这是哪个面板"）。
+    sub(ax[0], "(a) 全天电价")
 
     # ---------- (b) 负载、光伏与计划购电量（同为 kW，单轴）
     bands(ax[1])
@@ -211,8 +213,9 @@ def fig_q1_chain():
     ax[1].plot(h, g, color=C_BUY, lw=1.4, ls="--", label="计划购电量 $\\hat g_t$")
     ax[1].set_ylabel("功率 / kW", fontsize=9)
     ax[1].set_ylim(0, 1.32 * max(load.max(), pv.max(), g.max()))
-    ax[1].legend(fontsize=8.5, ncol=3, loc="upper left", framealpha=0.9)
-    sub(ax[1], "(b) 负载、光伏与计划购电量（统一 kW 单轴）")
+    # 图例不放图内：三条线的面板 (b) 里没有既空又不易误读的位置。
+    # 统一放到整个图的下方（与图 2 同一做法）；放在 (b) 正下方会被读成属于 (c)。
+    sub(ax[1], "(b) 负载、光伏与计划购电量")
 
     # ---------- (c) 充放电蝶形，10 分钟阶梯
     bands(ax[2])
@@ -223,14 +226,15 @@ def fig_q1_chain():
     ax[2].axhline(0, color="#555", lw=0.9)
     ax[2].set_ylim(-1.45 * d.max(), 1.45 * max(c.max(), 1.0))
     ax[2].set_ylabel("功率 / kW", fontsize=9)
-    ax[2].legend(fontsize=8.5, ncol=2, loc="upper left", framealpha=0.9)
-    ax[2].text(2.0, 0.55 * ax[2].get_ylim()[1], "0:00–4:00\n充电 4500.00 kWh",
+    # 不放图例：原先的方框正好压住本面板自己的"充电 4500.00 kWh"注释。
+    # 绿=充电、红=放电由三条彩色注释与图注说明，不再需要色块图例。
+    ax[2].text(2.0, 0.62 * ax[2].get_ylim()[1], "0:00–4:00 充电\n4500.00 kWh",
                fontsize=8.5, color="#1F4E36", ha="center", va="center")
-    ax[2].text(6.0, 0.62 * ax[2].get_ylim()[0], "4:00–8:00\n放电 6365.84 kWh",
+    ax[2].text(6.0, 0.62 * ax[2].get_ylim()[0], "4:00–8:00 放电\n6365.84 kWh",
                fontsize=8.5, color="#7A1F28", ha="center", va="center")
-    ax[2].text(18.0, 0.62 * ax[2].get_ylim()[0], "16:00–20:00\n放电 5780.13 kWh",
+    ax[2].text(18.0, 0.62 * ax[2].get_ylim()[0], "16:00–20:00 放电\n5780.13 kWh",
                fontsize=8.5, color="#7A1F28", ha="center", va="center")
-    sub(ax[2], "(c) 充放电功率（10 分钟粒度，非 4 小时块平均）")
+    sub(ax[2], "(c) 充放电功率")
 
     # ---------- (d) 储电量轨迹，10 分钟粒度
     bands(ax[3])
@@ -249,11 +253,17 @@ def fig_q1_chain():
     ax[3].text(0.15, 1200, " 下限 1200", va="bottom", fontsize=8.2, color="#555")
     ax[3].set_ylim(0, 12600)
     ax[3].set_ylabel("储电量 / kWh", fontsize=9)
-    ax[3].legend(fontsize=8.5, loc="upper right", framealpha=0.9)
+    # 同样不放图例：本面板只有一条线，标题与 y 轴标签已经说清。
     ax[3].set_xlim(0, 24)
     ax[3].set_xticks(np.arange(0, 25, 3))
     ax[3].set_xlabel("时刻 / h")
-    sub(ax[3], "(d) 储电量轨迹（10 分钟粒度，首末均为 6000 kWh）")
+    sub(ax[3], "(d) 储电量轨迹")
+
+    # 唯一的图例画在整个图的下方（(b) 的三条线是仅有的需要图例的序列；
+    # (c) 的充电/放电由三条彩色注释说明，(d) 只有一条线）。
+    h1, l1 = ax[1].get_legend_handles_labels()
+    fig.legend(h1, l1, fontsize=8.6, ncol=3, frameon=False,
+               loc="outside lower center")
 
     fig.savefig(os.path.join(OUT, "fig_q1_chain.png"))
     plt.close(fig)
@@ -285,8 +295,10 @@ def fig_q2_year():
     emg = np.array([agg[d] for d in order], float)
     x = np.arange(len(days))
 
-    fig, ax = plt.subplots(2, 1, figsize=(8.0, 4.9), sharex=True,
-                           gridspec_kw={"height_ratios": [1.2, 1]},
+    # 宽而矮：问题二末尾那几页被 4 张表塞满，图太高只能漂到下一节首行、
+    # 孤零零贴着节标题；改矮后更容易与正文同页，横向也更舒展。
+    fig, ax = plt.subplots(2, 1, figsize=(8.6, 3.35), sharex=True,
+                           gridspec_kw={"height_ratios": [1.15, 1]},
                            layout="constrained")
     ax[0].plot(x, s24, color=C_SOC, lw=1.3, label="每日 24:00 储电量")
     ax[0].axhline(10800, color="#888", ls=":", lw=1)

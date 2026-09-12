@@ -672,14 +672,14 @@ $\eta-1/\eta=-0.19<0$，纯属亏能量，最优解中不会出现。弃光量�
 (a) 全天电价，(b) 负载、光伏与计划购电量（统一 kW 单轴），(c) 充放电功率，
 (d) 储电量轨迹；充放电窗口以底带在四个面板上对齐，竖直方向即可读出「电价低的
 时段充电、电价高的时段放电」。表 \ref{tab:q1t2} 只列出 6 个 4 小时块的聚合量与
-两个储电量锚点，看不出充放电发生在什么时刻，故 (c)(d) 按 10 分钟粒度给出逐槽轨迹。
+两个储电量锚点，看不出充放电发生在什么时刻，故 (c)(d) 按 10 分钟粒度给出逐槽轨迹；
+(d) 的虚线为 6000 kWh（首末锚点）、点线为储电量上下限。(c)(d) 的逐槽数据由问题一
+LP 重解得到，其 6 个 4 小时块汇总与交付文件 \texttt{result1.xlsx} 逐块一致。
 
 \begin{figure}[!htbp]
   \centering
   \includegraphics[width=0.80\textwidth]{figures/fig_q1_chain.png}
-  \caption{问题一的全天决策链：(a) 全天电价；(b) 负载、光伏与计划购电量；
-  (c) 充放电功率（10 分钟粒度）；(d) 储电量轨迹。(c)(d) 的逐槽充放与储电量由
-  问题一 LP 重解得到，其 6 个 4 小时块汇总与交付文件 \texttt{result1.xlsx} 逐块一致。}
+  \caption{问题一：全天决策链（绿/红底带为储能充放电窗口）}
   \label{fig:q1day}
 \end{figure}
 
@@ -949,6 +949,15 @@ c_t^{\min}\ \text{由式}\eqref{eq:q2gamma}\ \text{给出},\; t=0,1,\dots,T-1
 电价的量级一致）。相对完美预见下界高出 $13.2\%$（本方案口径）或 $11.6\%$（共同
 口径）。
 
+图 \ref{fig:q2year} 给出全年的日末储电量轨迹与逐日紧急购电量。
+
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=0.78\textwidth]{figures/fig_q2_year.png}
+  \caption{问题二：全年日末储电量与逐日紧急购电量}
+  \label{fig:q2year}
+\end{figure}
+
 \noindent（3）指定日期的结果。表 \ref{tab:q2t1}、表 \ref{tab:q2t2} 与表
 \ref{tab:q2t3} 分别按题目表 1、表 2、表 3 的格式给出四个指定日期的结果。
 
@@ -1043,15 +1052,6 @@ c_t^{\min}\ \text{由式}\eqref{eq:q2gamma}\ \text{给出},\; t=0,1,\dots,T-1
 
 \subsubsection{结果分析与检验}
 \label{sec:q2lim}
-
-图 \ref{fig:q2year} 给出全年的日末储电量轨迹与逐日紧急购电量。
-
-\begin{figure}[!htbp]
-  \centering
-  \includegraphics[width=0.66\textwidth]{figures/fig_q2_year.png}
-  \caption{问题二：全年日末储电量与逐日紧急购电量}
-  \label{fig:q2year}
-\end{figure}
 
 由上述结果可以得出以下结论：
 
