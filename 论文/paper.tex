@@ -1078,6 +1078,8 @@ c_t^{\min}\ \text{由式}\eqref{eq:q2gamma}\ \text{给出},\; t=0,1,\dots,T-1
 12:00、18:00 三个时刻再依据新发布的预报\emph{调整}计划。由 \S2.4 之(2) 已推出
 违约费恒为零，即调整只允许上调。据此，本文将模型组织为计划、调整、执行与结算
 四层因果结构，如表 \ref{tab:q3layer} 所示，求解流程如图 \ref{fig:q3flow} 所示。
+表中最先进入模型的是附件 3 的整点预报，它必须先变成逐 10 分钟的逐槽输入才能参与
+求解——这一步的做法与效果是问题三求解的第一个环节，见 \S\ref{sec:q3plan}。
 
 \begin{figure}[!htbp]
   \centering
@@ -1113,6 +1115,11 @@ c_t^{\min}\ \text{由式}\eqref{eq:q2gamma}\ \text{给出},\; t=0,1,\dots,T-1
     结算层 & 事后 & 按式 \eqref{eq:q3cost} 结算 & 实测轨迹\\
     \bottomrule[1.5pt]
   \end{tabular}
+
+  \vspace{2pt}
+  \parbox{0.95\textwidth}{\zihao{-5} 注：表中最先进入模型的是附件 3 的整点预报，
+  它必须先变成逐 10 分钟的逐槽输入才能参与求解；计划层与调整层两处的预报输入
+  都由整点值按\emph{线性插值}得到，做法与效果见 \S\ref{sec:q3plan}。}
 \end{table}
 
 \subsubsection{第一层：0:00 计划模型}
