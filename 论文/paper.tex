@@ -192,49 +192,93 @@
 \begin{tikzpicture}[
     x=1cm, y=1cm,
     qblock/.style={rectangle, rounded corners=3pt, draw=black!65, line width=0.6pt,
-                   text width=6.1cm, align=left, font=\scriptsize,
-                   inner sep=5pt, minimum height=2.3cm},
+                   text width=6.60cm, align=left, font=\scriptsize, inner sep=5pt},
     q1b/.style={qblock, fill=blue!6},
     q2b/.style={qblock, fill=orange!10},
     q3b/.style={qblock, fill=green!8},
     q4b/.style={qblock, fill=red!6},
-    lab/.style={font=\tiny, color=black!70, fill=white, inner sep=1.5pt,
+    cbar/.style={rectangle, rounded corners=2pt, draw=black!65, line width=0.6pt,
+                 text width=15.50cm, align=left, font=\scriptsize, inner sep=5pt,
+                 fill=black!4},
+    lab/.style={font=\tiny, color=black!75, fill=white, inner sep=1.5pt,
                 align=center}
   ]
-  \node[q1b] (q1) at (0,0) {问题一\quad 确定性线性规划\\[2pt]
-    输入：附件 1，全天 144 个 10 分钟区间\\[1pt]
-    模型：目标 min Σ p\textsubscript{t} g\textsubscript{t} Δt，\\[1pt]
-    约束为功率平衡、储电递推与 $SOC_t\in[1200,10800]$\\[1pt]
-    结果：全天购电费 35\,126.95 元};
-  \node[q2b] (q2) at (8.6,0) {问题二\quad 两阶段购电优化\\[2pt]
-    输入：附件 2 全年负载与光伏，缺口按 5 倍价紧急购电\\[1pt]
-    模型：覆盖率 γ = 1 的可交付计划，\\[1pt]
-    执行层按当前缺口与 SOC 限幅逐槽定充放电\\[1pt]
-    结果：总购电费 13\,846\,553 元};
-  \node[q3b] (q3) at (0,-4.9) {问题三\quad 分位对冲与日内调整\\[2pt]
-    输入：附件 3 四档预报，0:00 计划、6/12/18 点调整\\[1pt]
-    模型：总费 = $\sum p\cdot\hat g$ + $0.5\sum p|g-\hat g|$ + $5\sum p\cdot e$，\\[1pt]
-    盲窗取 $\tau=0.80$、可调段取 $\tau'=0.55$\\[1pt]
-    结果：总购电费 14\,285\,731 元};
-  \node[q4b] (q4) at (8.6,-4.9) {问题四\quad 波动电价\\[2pt]
-    输入：附件 4 的逐日逐槽实际电价\\[1pt]
-    模型：计划层用公布剖面、结算层用实际价，\\[1pt]
-    紧急购电的场景系数改为逐场景逐槽\\[1pt]
-    结果：账单为原值的 1.0505 倍};
+  % ===================== 顶栏：四问复用的物理内核 =====================
+  \node[cbar, anchor=north west] (core) at (0,0) {%
+    \textbf{共用物理内核（四问复用）}\quad
+    储能递推 $SOC_{t+1}=SOC_t+\eta c_t\Delta t-d_t\Delta t/\eta$
+    （$\eta=0.9$，往返效率 $81\%$）、$SOC_t\in[1200,10800]$、
+    充放电功率 $\le 5000$ kW；计划购电量一律按电价 $p$ 计费。\\[1pt]
+    \textbf{四问的差别只在两处}：引入怎样的不确定性与信息结构、结算与价格口径如何设定。};
 
-  \draw[ar] (q1.east) -- node[lab, above=1pt] {引入逐日随机性\\与紧急购电}
-            (q2.west);
-  \draw[ar] (q3.east) -- node[lab, above=1pt] {引入预报\\与调整通道} (q4.west);
-  \draw[ar] (q1.south) -- node[lab, right=1pt] {复用储能物理与结算口径}
-            (q3.north);
-  \draw[ar] (q2.south) -- node[lab, right=1pt] {重算问题二口径} (q4.north);
+  % ===================== 第一行：问题一 → 问题二 =====================
+  \node[q1b, anchor=north west] (q1) at (0,-1.45) {%
+    \textbf{问题一\quad 确定性线性规划}\\[2pt]
+    \textbf{输入}：附件 1 典型日，电价、负载、光伏全天已知\\[1pt]
+    \textbf{口径}：购电量即计划量，按电价 $p$ 全额计费\\[1pt]
+    \textbf{模型}：以 144 个 10 min 区间的购电量、充放电功率与储电量为决策变量，
+    目标为全天购电费最小的线性规划，实质是储能套利，用 HIGHS 求解\\[1pt]
+    \textbf{结果}：全天购电费 \textbf{35\,126.95 元}};
+
+  \node[q2b, anchor=north east] (q2) at (15.85,-1.45) {%
+    \textbf{问题二\quad 两阶段随机规划}\\[2pt]
+    \textbf{输入}：附件 2 全年逐 10 min 实测，缺口按 $5p$ 紧急购电\\[1pt]
+    \textbf{口径}：0:00 只承诺计划购电量 $\hat g$，充放电与紧急购电都属实时追索量\\[1pt]
+    \textbf{模型}：以可交付充电下确界 $c^{\min}$ 统一计划层与执行层的储能物理；
+    情景集按暖机期日均净负荷分组（低需求日 $=$ 周五、周六，回看 6 天，无前视）\\[1pt]
+    \textbf{结果}：总购电费 \textbf{13\,846\,553 元}（紧急 619\,617 元）};
+
+  % ===================== 第二行：问题三 → 问题四 =====================
+  \node[q3b, anchor=north west] (q3) at (0,-6.0) {%
+    \textbf{问题三\quad 分块分位对冲与日内调整}\\[2pt]
+    \textbf{输入}：附件 3 四档预报，0:00 定计划，6:00/12:00/18:00 可调整\\[1pt]
+    \textbf{口径}：计划量全额付费（take-or-pay）加 $0.5p/1.5p$ 非对称惩罚
+    $\Rightarrow$ 最优解违约费恒为 0，调整只允许上调\\[1pt]
+    \textbf{模型}：按发布时刻把全天分块对冲（盲窗 $\tau=0.80$ 由报童临界比给出，
+    可调段 $\tau'=0.55$ 由扫描确定）$+$ 计划/调整/执行/结算四层因果 $+$ 预报水平的校正\\[1pt]
+    \textbf{结果}：总购电费 \textbf{14\,285\,731 元}（紧急 76\,784 kWh，
+    高出完美预见下界 $15.2\%$）};
+
+  \node[q4b, anchor=north east] (q4) at (15.85,-6.0) {%
+    \textbf{问题四\quad 部分信息口径下的波动电价}\\[2pt]
+    \textbf{输入}：附件 4 的逐日逐槽实际电价 $p_{d,t}$，重算问题二与问题三\\[1pt]
+    \textbf{依据}：方差分解——日内形状 $84.6\%$、日水平因子 $9.2\%$、日内残差 $6.2\%$；
+    日水平因子只是全天均匀平移，不改变任何边际权衡，故只有日内残差进决策\\[1pt]
+    \textbf{模型}：计划层按公布分时剖面、结算层按实际价（部分信息口径）；
+    紧急购电的场景系数由 $5p$ 改为 $5p_{\omega,t}/K$\\[1pt]
+    \textbf{结果}：账单 \textbf{15\,007\,661 元} $=$ 原值的 $\times\,1.0505$，
+    购电量与充放电量逐元素不变};
+
+  % ===================== 箭头：递进链 =====================
+  \draw[ar] (q1.east) -- node[lab, above=1pt] {引入逐日随机性\\与紧急购电} (q2.west);
+  \draw[ar] (q3.east) -- node[lab, above=1pt] {引入逐日逐槽\\实际电价} (q4.west);
+  % 问题二 → 问题三：走两行之上的走廊，避免与右侧竖箭头相撞
+  \draw[ar] (q2.south) -- ++(0,-0.55) -| (q3.north);
+  \node[lab] at (8.0,-4.85) {加入 6:00/12:00/18:00\\预报与调整通道};
+  % 问题四按实际价重算问题二（虚线，交付文件中的 result4-2）
+  \draw[dar] (q2.south east) -- node[lab, midway, left=2pt]
+             {按实际价\\重算问题二} (q4.north east);
+
+  % ===================== 底栏：贯穿四问的推导链 =====================
+  \node[cbar, anchor=north west] (chain) at (0,-9.75) {%
+    \textbf{贯穿四问的推导链}\quad
+    （1）无储能时报童临界比 $q^*=c_u/(c_u+c_o)=0.80$，计划量应取分位而非均值；
+    （2）储能把两侧代价削平，最优分位只能数值扫描，三档价差归结为分块分位对冲；
+    （3）take-or-pay 口径推出违约费恒为 0，用于验伪而非反推分位；
+    （4）电价总方差的 $84.6\%$ 在日内形状，只有日内残差进决策，价格信息仅值 53\,940 元。};
 \end{tikzpicture}
-  \caption{总体建模思路：四个问题的模型与求解过程}
+  \caption{总体建模思路：四个问题共用的物理内核、逐问的增量与贯穿全文的推导链}
   \label{fig:overall}
 \end{figure}
 
-图 \ref{fig:overall} 给出四个问题的模型与求解过程及其关联：左列两问以基准电价为
-前提，右列两问分别引入逐日随机性与价格波动；上下两行则是从确定性规划到信息与调整通道的递进。四个问题共用同一套储能物理与结算口径。
+图 \ref{fig:overall} 是全文的骨架。上栏是四问复用的储能物理与计费基准；中间四块
+逐问给出在这套内核之上新增的\emph{信息结构}、\emph{结算口径}、\emph{模型}与
+\emph{结果}，箭头标出每一项增量的来处：问题二从问题一引入逐日随机性与紧急购电，
+问题三在问题二之上加入预报与调整通道，问题四再把常量电价换成逐日逐槽实际价。
+下栏是贯穿四问的四条推导链，它们不是某一问的附属结论，而是后续各问反复引用的
+结构：报童临界比 $0.80$ 决定了盲窗的分位，储能对两侧代价的削平解释了为什么分位
+只能扫描，\emph{take-or-pay} 口径推出违约费恒为零并用它验伪，电价方差分解则说明
+价格波动只改账单、不改决策。
 
 \subsection{问题一分析}
 
